@@ -1,0 +1,12 @@
+{
+  "type": "init",
+  "partnerKey": "partner_test_123",
+  "token": "eyJhbGciOiJIUzI1NiJ9.test.token",
+  "theme": "light",
+  "primaryColor": "#4F46E5",
+  "userId": "user_42",
+  "apiBaseUrl": "https://api.fruga.co.uk",
+  "locale": "en-GB",
+  "safeArea": { "top": 47, "right": 0, "bottom": 34, "left": 0 },
+  "debug": false
+}

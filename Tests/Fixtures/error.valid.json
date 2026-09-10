@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "code": "TIMEOUT",
+  "message": "Bridge did not respond in time",
+  "recoverable": true
+}
