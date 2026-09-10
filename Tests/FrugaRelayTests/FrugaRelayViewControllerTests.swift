@@ -95,10 +95,26 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     }
   }
 
+  /// Embeds `controller` as a child of a retained window's root controller,
+  /// rather than presenting it, so UIKit propagates safe-area layout to a
+  /// controller whose view was never attached to a window otherwise.
+  private func mountInWindow(_ controller: UIViewController) {
+    let root = UIViewController()
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    window.rootViewController = root
+    window.makeKeyAndVisible()
+    self.window = window
+
+    root.addChild(controller)
+    root.view.addSubview(controller.view)
+    controller.didMove(toParent: root)
+  }
+
   // MARK: - The WebView is mounted and loads the CDN shell.
 
   func testWebViewIsAddedAsSubview() async throws {
     let viewController = makeViewController(config: makeConfig(), onError: { _ in })
+    viewController.loadsShellAutomatically = false
 
     viewController.loadViewIfNeeded()
 
@@ -127,7 +143,10 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     let presented = try await waitUntilPresented(by: presenter)
     XCTAssertTrue(presented is FrugaRelayViewController)
     XCTAssertEqual(presented.modalPresentationStyle, .pageSheet)
-    XCTAssertNotNil(presented.presentationController?.delegate)
+    // The delegate wiring itself is asserted deterministically by
+    // `testSwipeBackDelegateIsWiredByTheControllerItself`, which drives
+    // `viewWillAppear` directly; it is wired in `viewWillAppear`, which a
+    // host-less xctest process does not reliably call on its own timeline.
 
     FrugaRelay.close()
     try await waitUntilDismissed(from: presenter)
@@ -168,6 +187,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   func testDismissDecisionAsksTheShellAndReturnsFalse() async throws {
     let presenter = makeWindowRootedController()
     let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    controller.loadsShellAutomatically = false
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -182,6 +202,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   func testDismissDecisionStaysPresentedWhenShellReportsHandled() async throws {
     let presenter = makeWindowRootedController()
     let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    controller.loadsShellAutomatically = false
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -201,6 +222,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   func testDismissDecisionDismissesWhenShellReportsUnhandled() async throws {
     let presenter = makeWindowRootedController()
     let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    controller.loadsShellAutomatically = false
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -225,6 +247,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   func testDismissDecisionDismissesAfterTimeoutWithNoBackResult() async throws {
     let presenter = makeWindowRootedController()
     let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    controller.loadsShellAutomatically = false
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -253,6 +276,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
       config: makeConfig(tokenProvider: { reason in await recorder.provide(reason) }),
       onError: { _ in }
     )
+    controller.loadsShellAutomatically = false
     presenter.present(controller, animated: false)
     _ = try await waitUntilPresented(by: presenter)
 
@@ -291,30 +315,43 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   //        measured at load, not a hardcoded value.
 
   func testInitPayloadCarriesSafeAreaMeasuredAtLoad() async throws {
-    let presenter = makeWindowRootedController()
+    // `lastInitPayload` is composed in `viewDidLayoutSubviews`, which a
+    // presented-but-detached controller never runs in a host-less xctest
+    // process; `loadsShellAutomatically = false` skips the CDN fetch so the
+    // layout pass below is what drives the payload, not a network mount.
     let viewController = makeViewController(config: makeConfig(), onError: { _ in })
-
-    presenter.present(viewController, animated: false)
-    _ = try await waitUntilPresented(by: presenter)
+    viewController.loadsShellAutomatically = false
+    mountInWindow(viewController)
+    viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 10, left: 0, bottom: 20, right: 0)
+    window?.layoutIfNeeded()
 
     let payload = try XCTUnwrap(viewController.lastInitPayload)
 
     XCTAssertEqual(payload.safeArea, viewController.currentSafeArea())
+    XCTAssertNotEqual(payload.safeArea, SafeArea(top: 0, right: 0, bottom: 0, left: 0))
   }
 
   // MARK: - additionalSafeAreaInsets set before layout are reflected by
   //        currentSafeArea() (not zeros).
 
   func testCurrentSafeAreaReflectsAdditionalSafeAreaInsets() async throws {
+    // A detached view never receives safe-area propagation from UIKit, so
+    // the controller is mounted in the retained test window as a child of
+    // its root controller; `loadsShellAutomatically = false` skips the CDN
+    // fetch this test does not care about.
     let viewController = makeViewController(config: makeConfig(), onError: { _ in })
-    viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 10, left: 0, bottom: 20, right: 0)
+    viewController.loadsShellAutomatically = false
+    mountInWindow(viewController)
+    window?.layoutIfNeeded()
+    let baseline = viewController.currentSafeArea()
 
-    viewController.loadViewIfNeeded()
-    viewController.view.layoutIfNeeded()
+    viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 10, left: 0, bottom: 20, right: 0)
+    window?.layoutIfNeeded()
 
     let safeArea = viewController.currentSafeArea()
 
-    XCTAssertEqual(safeArea, SafeArea(top: 10, right: 0, bottom: 20, left: 0))
+    XCTAssertEqual(safeArea.top, baseline.top + 10)
+    XCTAssertEqual(safeArea.bottom, baseline.bottom + 20)
   }
 
   // MARK: - The swipe-back delegate is wired by the controller itself, not
@@ -326,6 +363,10 @@ final class FrugaRelayViewControllerTests: XCTestCase {
 
     presenter.present(controller, animated: false)
     _ = try await waitUntilPresented(by: presenter)
+    // The delegate is wired in `viewWillAppear`, which UIKit drives during a
+    // real presentation transition in an app; a host-less xctest process
+    // never runs that transition, so it is called directly here.
+    controller.viewWillAppear(false)
 
     XCTAssertTrue(controller.presentationController?.delegate === controller)
   }

@@ -70,7 +70,11 @@ final class FrugaRelayLifecycleTests: XCTestCase {
   //        with Android's FrugaRelayFragment / FrugaTokenCoordinator.needsRefresh).
 
   func testForegroundReRequestsTokenWhenPastTtl() async throws {
-    let presenter = makeWindowRootedController()
+    // The foreground observer is registered in `init`, and `session`/
+    // `coordinator` work on an unloaded controller: presenting the
+    // controller (and the CDN shell load it triggers) is not needed and
+    // was stalling the main actor past this test's 2s wall-clock budgets
+    // on the CI runner.
     let recorder = RecordingTokenProvider()
     let controller = FrugaRelayViewController(
       config: FrugaRelayConfig(
@@ -80,8 +84,6 @@ final class FrugaRelayLifecycleTests: XCTestCase {
       ),
       onError: { _ in }
     )
-    presenter.present(controller, animated: false)
-    _ = try await waitUntilPresented(by: presenter)
 
     controller.session.receive(
       try JSONEncoder().encode(FrugaNativeMessage.tokenRequired(TokenRequiredPayload(reason: .initial)))
