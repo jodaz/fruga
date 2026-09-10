@@ -29,13 +29,9 @@ public final class FrugaRelayViewController: UIViewController {
   /// tests can swap it before the first navigation.
   lazy var openExternally: (URL) -> Void = { [weak self] url in
     // `SFSafariViewController` only takes http(s) and only works once we are
-    // in a window; anything else goes to the system.
-    guard let self, self.view.window != nil, let scheme = url.scheme?.lowercased(),
-      scheme == "http" || scheme == "https"
-    else {
-      UIApplication.shared.open(url)
-      return
-    }
+    // in a window. Anything else is dropped rather than handed to the system:
+    // the bridge must not drive-launch third-party apps.
+    guard let self, self.view.window != nil, FrugaExternalURLRule.allows(url) else { return }
     self.present(SFSafariViewController(url: url), animated: true)
   }
   var coordinator: FrugaTokenCoordinator?
@@ -43,8 +39,9 @@ public final class FrugaRelayViewController: UIViewController {
   /// touch main-actor state, and passing `self` to the notification centre
   /// counts as touching it.
   nonisolated(unsafe) private var foregroundObserver: NSObjectProtocol?
-  /// The `init` payload the session started with, composed after the first
-  /// layout so the safe area is measured, not zeros.
+  /// The `init` payload the session started with. Composed in `viewDidLoad`,
+  /// before the shell load can report back, and re-composed whenever the
+  /// measured safe area turns out different.
   private(set) var lastInitPayload: InitPayload?
   /// Seam for host-less test processes, where the real dismissal never
   /// completes because no app drives the transition. `nil` in an app, where
@@ -150,6 +147,11 @@ public final class FrugaRelayViewController: UIViewController {
       webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
     ])
 
+    // Registered before the load starts: a `didFinish` that beats the first
+    // layout pass must still find an `init` to send (parity with Android's
+    // `FrugaRelayFragment`, which registers `init` before `loadUrl`).
+    registerInitPayload()
+
     guard loadsShellAutomatically else { return }
     webView.load(URLRequest(url: FrugaRelayVersion.shellURL))
   }
@@ -162,15 +164,21 @@ public final class FrugaRelayViewController: UIViewController {
   }
 
   /// The safe area is only real once the view has been laid out in its window,
-  /// so `init` is composed here rather than in `viewDidLoad` (where the insets
-  /// are still zeros). The session only sends it when the shell finishes
-  /// loading, which is always later than the first layout pass.
+  /// so the payload registered in `viewDidLoad` is refreshed here as soon as
+  /// the measured insets differ (first layout, rotation, keyboard).
   public override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
-    guard lastInitPayload == nil else { return }
+    guard lastInitPayload?.safeArea != currentSafeArea() else { return }
+    registerInitPayload()
+  }
+
+  /// Composes `init` from the safe area measured right now and hands it to the
+  /// session, which replays it on every load.
+  private func registerInitPayload() {
     let payload = config.makeInitPayload(safeArea: currentSafeArea(), token: nil)
+    let message = FrugaHostMessage.`init`(payload)
     do {
-      session.start(initMessage: try FrugaHostMessage.`init`(payload).encode())
+      session.start(initMessage: try message.encode(), message: message)
       lastInitPayload = payload
     } catch {
       // Nothing can be mounted without an `init`, so this is terminal, not silent.
@@ -225,8 +233,8 @@ public final class FrugaRelayViewController: UIViewController {
   }
 
   private func sendTokenUpdate(_ token: String) {
-    guard let message = try? FrugaHostMessage.tokenUpdate(TokenUpdatePayload(token: token)).encode() else { return }
-    bridge.send(message)
+    // Through the session, so it stays the single path to the shell.
+    session.send(.tokenUpdate(TokenUpdatePayload(token: token)))
   }
 
   func currentSafeArea() -> SafeArea {

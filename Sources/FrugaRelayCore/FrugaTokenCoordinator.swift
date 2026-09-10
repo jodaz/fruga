@@ -26,10 +26,9 @@ public actor FrugaTokenCoordinator {
   private let onError: @Sendable (FrugaError) -> Void
   private var inFlight: Task<Void, Never>?
   /// When a token was last delivered to `onToken`, for the foreground TTL
-  /// re-check. `nonisolated(unsafe)`: a `Date?` write is atomic enough for a
-  /// staleness check, and the screen reads it from the main actor.
-  // ponytail: plain stored Date?, revisit if it ever needs to be transactional
-  nonisolated(unsafe) public var lastTokenAt: Date?
+  /// re-check. Actor-isolated and read-only from outside: only a delivery or
+  /// the `markTokenDelivered(at:)` seam writes it.
+  public private(set) var lastTokenAt: Date?
 
   public init(
     provider: @escaping FrugaTokenProvider,

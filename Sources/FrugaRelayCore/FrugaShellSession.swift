@@ -29,9 +29,14 @@ public final class FrugaShellSession {
   /// screen, which hands it to the same system browser component the
   /// navigation allowlist uses.
   public var onOpenExternal: ((URL) -> Void)?
-  /// The last message handed to `send(_:)`, for tests and diagnostics.
-  public private(set) var lastSent: FrugaHostMessage?
+  /// The last message handed to `send(_:)` (or replayed as `init`). Internal
+  /// on purpose: it is test and diagnostic state, and a partner must not be
+  /// able to read a bearer token back out of the session.
+  private(set) var lastSent: FrugaHostMessage?
   private var initMessage: Data?
+  /// The typed form of `initMessage`, when the caller had one. The bytes stay
+  /// the source of truth so a replay is byte-exact.
+  private var initHostMessage: FrugaHostMessage?
   private var pendingBack: ((Bool) -> Void)?
   private var backTimeout: Task<Void, Never>?
 
@@ -46,8 +51,10 @@ public final class FrugaShellSession {
   }
 
   /// Remembers the `init` message. It is sent on the next `shellDidLoad()`.
-  public func start(initMessage: Data) {
+  /// `message` is the typed form of the same bytes, when the caller has one.
+  public func start(initMessage: Data, message: FrugaHostMessage? = nil) {
     self.initMessage = initMessage
+    initHostMessage = message
   }
 
   /// Encodes and forwards a host message. An unencodable message is dropped,
@@ -61,6 +68,7 @@ public final class FrugaShellSession {
   /// The shell page finished loading — first load or any reload.
   public func shellDidLoad() {
     guard let initMessage else { return }
+    if let initHostMessage { lastSent = initHostMessage }
     transport.send(initMessage)
   }
 
