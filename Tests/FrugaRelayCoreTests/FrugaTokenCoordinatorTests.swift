@@ -40,12 +40,14 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
       )
 
       await coordinator.request(reason: reason)
-      await provider.waitForCall()
+      let called = await provider.waitForCall()
+      XCTAssertTrue(called)
       let calls = await provider.calls
       XCTAssertEqual(calls, [reason], "provider should be called with \(reason) exactly")
 
       await provider.resolve(.success("token-\(reason.rawValue)"))
-      await recorder.waitForToken()
+      let gotToken = await recorder.waitForToken()
+      XCTAssertTrue(gotToken)
 
       let tokens = await recorder.tokens
       let errors = await recorder.errors
@@ -69,9 +71,11 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
     )
 
     await coordinator.request(reason: .ttl)
-    await provider.waitForCall()
+    let called = await provider.waitForCall()
+    XCTAssertTrue(called)
     await provider.resolve(.failure(SomeProviderError()))
-    await recorder.waitForError()
+    let gotError = await recorder.waitForError()
+    XCTAssertTrue(gotError)
 
     let errors = await recorder.errors
     let tokens = await recorder.tokens
@@ -94,9 +98,11 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
     )
 
     await coordinator.request(reason: .initial)
-    await provider.waitForCall()
+    let called = await provider.waitForCall()
+    XCTAssertTrue(called)
     await coordinator.cancel()
-    await provider.waitForCancellation()
+    let cancelled = await provider.waitForCancellation()
+    XCTAssertTrue(cancelled)
 
     let observed = await provider.cancellationObserved
     XCTAssertTrue(observed, "the provider's in-flight call should see the cancellation")
@@ -122,10 +128,12 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
     )
 
     await coordinator.request(reason: .initial)
-    await provider.waitForCall()
+    let called = await provider.waitForCall()
+    XCTAssertTrue(called)
     await coordinator.request(reason: .ttl)
     await provider.resolve(.success("only-once"))
-    await recorder.waitForToken()
+    let gotToken = await recorder.waitForToken()
+    XCTAssertTrue(gotToken)
 
     let calls = await provider.calls
     let tokens = await recorder.tokens
@@ -173,9 +181,11 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
     XCTAssertNil(beforeDelivery)
 
     await coordinator.request(reason: .initial)
-    await provider.waitForCall()
+    let called = await provider.waitForCall()
+    XCTAssertTrue(called)
     await provider.resolve(.success("token"))
-    await recorder.waitForToken()
+    let gotToken = await recorder.waitForToken()
+    XCTAssertTrue(gotToken)
 
     let afterDelivery = await coordinator.lastTokenAt
     XCTAssertNotNil(afterDelivery)
@@ -206,9 +216,11 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
     )
 
     await coordinator.request(reason: .initial)
-    await provider.waitForCall()
+    let called = await provider.waitForCall()
+    XCTAssertTrue(called)
     await provider.resolve(.success("token"))
-    await recorder.waitForToken()
+    let gotToken = await recorder.waitForToken()
+    XCTAssertTrue(gotToken)
 
     let stored = await coordinator.lastTokenAt
     let deliveredAt = try XCTUnwrap(stored)
@@ -231,12 +243,9 @@ private actor FakeProvider {
   private(set) var calls: [TokenRequiredPayload.Reason] = []
   private(set) var cancellationObserved = false
   private var pendingContinuation: CheckedContinuation<String, Error>?
-  private var startWaiters: [CheckedContinuation<Void, Never>] = []
-  private var cancelWaiters: [CheckedContinuation<Void, Never>] = []
 
   func provide(_ reason: TokenRequiredPayload.Reason) async throws -> String {
     calls.append(reason)
-    resumeStartWaiters()
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
         Task { await self.storePending(continuation) }
@@ -251,18 +260,22 @@ private actor FakeProvider {
     pendingContinuation = nil
   }
 
-  func waitForCall() async {
-    if !calls.isEmpty { return }
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      startWaiters.append(continuation)
+  /// Bounded poll, not an unbounded continuation: a coordinator bug that
+  /// never calls the provider fails the assertion instead of hanging.
+  func waitForCall(timeout: TimeInterval = 5.0) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while calls.isEmpty, Date() < deadline {
+      try? await Task.sleep(nanoseconds: 20_000_000)
     }
+    return !calls.isEmpty
   }
 
-  func waitForCancellation() async {
-    if cancellationObserved { return }
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      cancelWaiters.append(continuation)
+  func waitForCancellation(timeout: TimeInterval = 5.0) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !cancellationObserved, Date() < deadline {
+      try? await Task.sleep(nanoseconds: 20_000_000)
     }
+    return cancellationObserved
   }
 
   private func storePending(_ continuation: CheckedContinuation<String, Error>) {
@@ -273,15 +286,6 @@ private actor FakeProvider {
     cancellationObserved = true
     pendingContinuation?.resume(throwing: CancellationError())
     pendingContinuation = nil
-    let waiters = cancelWaiters
-    cancelWaiters = []
-    waiters.forEach { $0.resume() }
-  }
-
-  private func resumeStartWaiters() {
-    let waiters = startWaiters
-    startWaiters = []
-    waiters.forEach { $0.resume() }
   }
 }
 
@@ -290,34 +294,30 @@ private actor FakeProvider {
 private actor Recorder {
   private(set) var tokens: [String] = []
   private(set) var errors: [FrugaError] = []
-  private var tokenWaiters: [CheckedContinuation<Void, Never>] = []
-  private var errorWaiters: [CheckedContinuation<Void, Never>] = []
 
   func recordToken(_ token: String) {
     tokens.append(token)
-    let waiters = tokenWaiters
-    tokenWaiters = []
-    waiters.forEach { $0.resume() }
   }
 
   func recordError(_ error: FrugaError) {
     errors.append(error)
-    let waiters = errorWaiters
-    errorWaiters = []
-    waiters.forEach { $0.resume() }
   }
 
-  func waitForToken() async {
-    if !tokens.isEmpty { return }
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      tokenWaiters.append(continuation)
+  /// Bounded poll, not an unbounded continuation: a coordinator bug that
+  /// never delivers fails the assertion instead of hanging.
+  func waitForToken(timeout: TimeInterval = 5.0) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while tokens.isEmpty, Date() < deadline {
+      try? await Task.sleep(nanoseconds: 20_000_000)
     }
+    return !tokens.isEmpty
   }
 
-  func waitForError() async {
-    if !errors.isEmpty { return }
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      errorWaiters.append(continuation)
+  func waitForError(timeout: TimeInterval = 5.0) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while errors.isEmpty, Date() < deadline {
+      try? await Task.sleep(nanoseconds: 20_000_000)
     }
+    return !errors.isEmpty
   }
 }

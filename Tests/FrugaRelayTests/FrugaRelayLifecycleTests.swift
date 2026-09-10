@@ -127,12 +127,13 @@ final class FrugaRelayLifecycleTests: XCTestCase {
     controller.session.receive(
       try JSONEncoder().encode(FrugaNativeMessage.tokenRequired(TokenRequiredPayload(reason: .initial)))
     )
-    await provider.waitForCall()
+    let called = await provider.waitForCall()
+    XCTAssertTrue(called, "the provider should have been called before closing")
 
-    controller.performDismiss()
-    // The host-less test process drives no real dismissal transition, so
-    // `isBeingDismissed` is forced the same way UIKit would report it.
-    controller.viewDidDisappear(false)
+    // Drives the same cancellation `viewDidDisappear` triggers, without
+    // depending on `isBeingDismissed`, which a host-less xctest process
+    // never sets.
+    controller.relayDidDisappear(isDismissing: true)
 
     let cancelled = await provider.waitForCancellation(timeout: 1.0)
     XCTAssertTrue(cancelled, "the provider's task should observe the cancellation within 1s")
@@ -198,12 +199,9 @@ private actor CancellationRecordingProvider {
   private(set) var cancellationObserved = false
   private var called = false
   private var pendingContinuation: CheckedContinuation<String, Error>?
-  private var startWaiters: [CheckedContinuation<Void, Never>] = []
-  private var cancelWaiters: [CheckedContinuation<Void, Never>] = []
 
   func provide(_ reason: TokenRequiredPayload.Reason) async throws -> String {
     called = true
-    resumeStartWaiters()
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
         Task { await self.storePending(continuation) }
@@ -213,33 +211,26 @@ private actor CancellationRecordingProvider {
     }
   }
 
-  func waitForCall() async {
-    if called { return }
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      startWaiters.append(continuation)
+  /// Bounded poll, not a continuation nothing may resume: a caller that
+  /// never calls `provide` should return `false` at the deadline instead of
+  /// hanging the test.
+  func waitForCall(timeout: TimeInterval = 5.0) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !called, Date() < deadline {
+      try? await Task.sleep(nanoseconds: 20_000_000)
     }
+    return called
   }
 
-  func waitForCancellation(timeout: TimeInterval) async -> Bool {
-    if cancellationObserved { return true }
-    return await withTaskGroup(of: Bool.self) { group in
-      group.addTask { await self.observeCancellation() }
-      group.addTask {
-        try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-        return false
-      }
-      let result = (await group.next()) ?? false
-      group.cancelAll()
-      return result
+  /// Bounded poll instead of a `withTaskGroup`/continuation pair: cancelling
+  /// the group does not resume a continuation parked in a child task, so a
+  /// missed cancellation used to hang this call forever.
+  func waitForCancellation(timeout: TimeInterval = 1.0) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !cancellationObserved, Date() < deadline {
+      try? await Task.sleep(nanoseconds: 20_000_000)
     }
-  }
-
-  private func observeCancellation() async -> Bool {
-    if cancellationObserved { return true }
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      cancelWaiters.append(continuation)
-    }
-    return true
+    return cancellationObserved
   }
 
   private func storePending(_ continuation: CheckedContinuation<String, Error>) {
@@ -254,15 +245,6 @@ private actor CancellationRecordingProvider {
     cancellationObserved = true
     pendingContinuation?.resume(throwing: CancellationError())
     pendingContinuation = nil
-    let waiters = cancelWaiters
-    cancelWaiters = []
-    waiters.forEach { $0.resume() }
-  }
-
-  private func resumeStartWaiters() {
-    let waiters = startWaiters
-    startWaiters = []
-    waiters.forEach { $0.resume() }
   }
 }
 
