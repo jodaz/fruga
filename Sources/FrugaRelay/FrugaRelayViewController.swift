@@ -50,6 +50,9 @@ public final class FrugaRelayViewController: UIViewController {
   /// completes because no app drives the transition. `nil` in an app, where
   /// `performDismiss` runs the real `dismiss(animated:)`.
   var dismissHandler: (() -> Void)?
+  /// Seam for tests that mount the view without a network round trip to the
+  /// CDN shell. Set before the view loads; always `true` in an app.
+  var loadsShellAutomatically = true
 
   /// Every dismissal site goes through here so tests can observe it.
   func performDismiss() {
@@ -147,6 +150,7 @@ public final class FrugaRelayViewController: UIViewController {
       webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
     ])
 
+    guard loadsShellAutomatically else { return }
     webView.load(URLRequest(url: FrugaRelayVersion.shellURL))
   }
 
