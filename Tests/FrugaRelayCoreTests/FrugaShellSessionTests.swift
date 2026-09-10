@@ -127,9 +127,10 @@ final class FrugaShellSessionTests: XCTestCase {
 // MARK: - Test double
 
 /// Records what a `FrugaShellSession` sent/reloaded. All calls in these
-/// tests happen synchronously on the main actor, so plain arrays are safe;
-/// `@unchecked Sendable` only to satisfy `FrugaShellTransport: Sendable`.
-private final class FakeTransport: FrugaShellTransport, @unchecked Sendable {
+/// tests happen synchronously on the main actor; `FrugaShellTransport` is
+/// `@MainActor`-isolated, so no `Sendable` conformance is needed here.
+@MainActor
+private final class FakeTransport: FrugaShellTransport {
   private(set) var sent: [Data] = []
   private(set) var reloadCount = 0
 
