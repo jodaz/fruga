@@ -11,9 +11,7 @@ import WebKit
 /// `WKWebView.navigationDelegate` is weak, so the host must retain this object
 /// for as long as the WebView is on screen.
 @MainActor
-public final class FrugaRelayWebView: NSObject, @preconcurrency FrugaShellTransport,
-  WKNavigationDelegate
-{
+public final class FrugaRelayWebView: NSObject, FrugaShellTransport, WKNavigationDelegate {
   public let webView: WKWebView
   /// Weak: `FrugaShellSession` holds its transport strongly.
   private weak var session: FrugaShellSession?
@@ -51,12 +49,13 @@ public final class FrugaRelayWebView: NSObject, @preconcurrency FrugaShellTransp
     session?.processDidTerminate()
   }
 
-  // MARK: - Private
+  // MARK: - Internal
 
   /// `window.FrugaNative.receive` takes the JSON as a *string*, so the bytes
   /// cross as a JS string literal. `JSONSerialization` does the escaping; a
   /// non-UTF-8 or unencodable payload is dropped rather than injected raw.
-  private static func jsStringLiteral(_ json: Data) -> String? {
+  /// Pure, so `nonisolated`: tests call it without hopping to the main actor.
+  nonisolated static func jsStringLiteral(_ json: Data) -> String? {
     guard let text = String(data: json, encoding: .utf8),
       let escaped = try? JSONSerialization.data(withJSONObject: text, options: .fragmentsAllowed)
     else { return nil }

@@ -1,8 +1,11 @@
 import Foundation
 
 /// What a shell session can do to its WebView. Implemented in the `FrugaRelay`
-/// target by the `WKWebView` host; faked in tests.
-public protocol FrugaShellTransport: AnyObject, Sendable {
+/// target by the `WKWebView` host; faked in tests. Main-actor isolated: every
+/// bridge call touches the WebView, so isolation belongs on the protocol rather
+/// than on a `Sendable` conformance each implementer has to justify.
+@MainActor
+public protocol FrugaShellTransport: AnyObject {
   func reload()
   func send(_ json: Data)
 }
@@ -12,12 +15,15 @@ public protocol FrugaShellTransport: AnyObject, Sendable {
 @MainActor
 public final class FrugaShellSession {
   private let transport: FrugaShellTransport
-  private let onError: @Sendable (FrugaError) -> Void
+  /// Not `@Sendable`: the session is main-actor isolated and only ever calls
+  /// this synchronously on the main actor, so the sink may close over the
+  /// caller's state.
+  private let onError: (FrugaError) -> Void
   private var initMessage: Data?
 
   public init(
     transport: FrugaShellTransport,
-    onError: @escaping @Sendable (FrugaError) -> Void
+    onError: @escaping (FrugaError) -> Void
   ) {
     self.transport = transport
     self.onError = onError
