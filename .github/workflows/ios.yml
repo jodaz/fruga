@@ -22,7 +22,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pick an available simulator
+        run: |
+          pick_device() {
+            xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; ids=[dev["udid"] for rt,devs in d.items() if "iOS" in rt for dev in devs if dev["name"].startswith("iPhone")]; print(ids[0] if ids else "")'
+          }
+          DEST_ID=$(pick_device)
+          if [ -z "$DEST_ID" ]; then
+            echo "No iPhone simulator found, downloading iOS platform..."
+            xcodebuild -downloadPlatform iOS
+            DEST_ID=$(pick_device)
+          fi
+          if [ -z "$DEST_ID" ]; then
+            echo "Still no iPhone simulator available" >&2
+            exit 1
+          fi
+          echo "DEST_ID=$DEST_ID" >> "$GITHUB_ENV"
+          xcrun simctl list devices available | grep "$DEST_ID"
+
       - name: Test
-        run: xcodebuild -scheme FrugaRelay -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' test
+        run: xcodebuild -scheme FrugaRelay -destination "id=$DEST_ID" test
         env:
           CODE_SIGNING_ALLOWED: NO
