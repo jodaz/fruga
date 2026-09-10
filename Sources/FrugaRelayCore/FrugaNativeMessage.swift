@@ -114,6 +114,12 @@ public struct ErrorPayload: Codable, Equatable {
     case bridgeTimeout = "BRIDGE_TIMEOUT"
     case processTerminated = "PROCESS_TERMINATED"
     case tokenProviderFailed = "TOKEN_PROVIDER_FAILED"
+    /// Native-raised only; the shell never sends it. iOS enforces the engine
+    /// floor (WebKit as shipped in Safari 16.4) through the deployment target,
+    /// so this SDK never raises it itself. The case exists so the `FrugaError`
+    /// code set matches the other platforms, where Android checks the WebView
+    /// version at runtime.
+    case unsupportedEngine = "UNSUPPORTED_ENGINE"
   }
 
   public let code: Code

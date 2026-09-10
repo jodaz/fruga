@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
   name: "FrugaRelay",
-  platforms: [.iOS(.v16)],
+  platforms: [.iOS("16.4")],
   products: [
     .library(name: "FrugaRelay", targets: ["FrugaRelay", "FrugaRelayCore"])
   ],
