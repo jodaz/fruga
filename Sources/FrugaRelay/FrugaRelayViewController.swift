@@ -182,7 +182,13 @@ public final class FrugaRelayViewController: UIViewController {
 
   public override func viewDidDisappear(_ animated: Bool) {
     super.viewDidDisappear(animated)
-    guard isBeingDismissed, let coordinator else { return }
+    relayDidDisappear(isDismissing: isBeingDismissed)
+  }
+
+  /// Seam over `isBeingDismissed`, which UIKit only sets under a real
+  /// presentation; a host-less test process can never make it true.
+  func relayDidDisappear(isDismissing: Bool) {
+    guard isDismissing, let coordinator else { return }
     Task { await coordinator.cancel() }
   }
 
