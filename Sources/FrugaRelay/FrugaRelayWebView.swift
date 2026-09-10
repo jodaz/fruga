@@ -15,6 +15,9 @@ public final class FrugaRelayWebView: NSObject, FrugaShellTransport, WKNavigatio
   public let webView: WKWebView
   /// Weak: `FrugaShellSession` holds its transport strongly.
   private weak var session: FrugaShellSession?
+  /// The host's navigation allowlist check: `(url, isMainFrame) -> allow`.
+  /// Unset means allow, so a bare `FrugaRelayWebView` still loads.
+  var shouldAllowNavigation: ((URL, Bool) -> Bool)?
 
   public init(webView: WKWebView) {
     self.webView = webView
@@ -40,6 +43,19 @@ public final class FrugaRelayWebView: NSObject, FrugaShellTransport, WKNavigatio
   }
 
   // MARK: - WKNavigationDelegate
+
+  public func webView(
+    _ webView: WKWebView,
+    decidePolicyFor navigationAction: WKNavigationAction,
+    decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+  ) {
+    guard let url = navigationAction.request.url, let shouldAllowNavigation else {
+      decisionHandler(.allow)
+      return
+    }
+    let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+    decisionHandler(shouldAllowNavigation(url, isMainFrame) ? .allow : .cancel)
+  }
 
   public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     session?.shellDidLoad()

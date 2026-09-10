@@ -1,6 +1,7 @@
 #if canImport(UIKit) && canImport(WebKit)
 
 import FrugaRelayCore
+import SafariServices
 import UIKit
 import WebKit
 
@@ -22,6 +23,21 @@ public final class FrugaRelayViewController: UIViewController {
   private let messageProxy: ScriptMessageProxy
   private let config: FrugaRelayConfig
   private let onError: (FrugaError) -> Void
+  /// Only the CDN and API origins load in the WebView.
+  let policy: FrugaNavigationPolicy
+  /// Everything the policy rejects, plus the shell's `openExternal`. `lazy` so
+  /// tests can swap it before the first navigation.
+  lazy var openExternally: (URL) -> Void = { [weak self] url in
+    // `SFSafariViewController` only takes http(s) and only works once we are
+    // in a window; anything else goes to the system.
+    guard let self, self.view.window != nil, let scheme = url.scheme?.lowercased(),
+      scheme == "http" || scheme == "https"
+    else {
+      UIApplication.shared.open(url)
+      return
+    }
+    self.present(SFSafariViewController(url: url), animated: true)
+  }
   /// Not `lazy`: `deinit` must be able to cancel it without creating one.
   private var coordinator: FrugaTokenCoordinator?
 
@@ -32,6 +48,7 @@ public final class FrugaRelayViewController: UIViewController {
 
     self.config = config
     self.onError = onError
+    policy = .standard(apiBaseUrl: config.options.apiBaseUrl.flatMap(URL.init(string:)))
     messageProxy = proxy
     webView = WKWebView(frame: .zero, configuration: configuration)
     bridge = FrugaRelayWebView(webView: webView)
@@ -60,6 +77,31 @@ public final class FrugaRelayViewController: UIViewController {
     session.onTokenRequired = { reason in
       Task { await coordinator.request(reason: reason) }
     }
+    // Read through the property, so a replacement set after init is honoured.
+    session.onOpenExternal = { [weak self] url in self?.openExternally(url) }
+    bridge.shouldAllowNavigation = { [weak self] url, isMainFrame in
+      self?.handleNavigation(to: url, isMainFrame: isMainFrame) ?? false
+    }
+  }
+
+  /// Test support for #77's navigation cases, which build the screen from a
+  /// raw `InitPayload`. The provider is never called.
+  convenience init(initPayload: InitPayload, onError: @escaping (FrugaError) -> Void) {
+    self.init(
+      config: FrugaRelayConfig(
+        partnerKey: initPayload.partnerKey,
+        tokenProvider: { _ in throw CancellationError() },
+        options: FrugaRelayOptions(
+          theme: initPayload.theme,
+          primaryColor: initPayload.primaryColor,
+          userId: initPayload.userId,
+          apiBaseUrl: initPayload.apiBaseUrl,
+          locale: initPayload.locale,
+          debug: initPayload.debug
+        )
+      ),
+      onError: onError
+    )
   }
 
   @available(*, unavailable)
@@ -119,6 +161,18 @@ public final class FrugaRelayViewController: UIViewController {
   }
 
   // MARK: - Internal
+
+  /// `true` lets the WebView load the navigation; `false` means the policy sent
+  /// it to the system browser instead.
+  func handleNavigation(to url: URL, isMainFrame: Bool) -> Bool {
+    switch policy.decide(url, isMainFrame: isMainFrame) {
+    case .allow:
+      return true
+    case .openExternally:
+      openExternally(url)
+      return false
+    }
+  }
 
   private func sendTokenUpdate(_ token: String) {
     guard let message = try? FrugaHostMessage.tokenUpdate(TokenUpdatePayload(token: token)).encode() else { return }

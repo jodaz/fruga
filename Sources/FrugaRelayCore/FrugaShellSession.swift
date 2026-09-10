@@ -25,6 +25,10 @@ public final class FrugaShellSession {
   /// The shell asked for a token. Set by the screen, which forwards the reason
   /// to its `FrugaTokenCoordinator`. Main-actor, like everything else here.
   public var onTokenRequired: ((TokenRequiredPayload.Reason) -> Void)?
+  /// The shell asked for a URL to be opened outside the WebView. Set by the
+  /// screen, which hands it to the same system browser component the
+  /// navigation allowlist uses.
+  public var onOpenExternal: ((URL) -> Void)?
   private var initMessage: Data?
   private var pendingBack: ((Bool) -> Void)?
   private var backTimeout: Task<Void, Never>?
@@ -70,6 +74,9 @@ public final class FrugaShellSession {
     switch message {
     case let .backResult(payload): resolveBack(payload.handled)
     case let .tokenRequired(payload): onTokenRequired?(payload.reason)
+    case let .openExternal(payload):
+      // A malformed URL is dropped, like any other malformed inbound field.
+      if let url = URL(string: payload.url) { onOpenExternal?(url) }
     default: break
     }
     onMessage(message)
