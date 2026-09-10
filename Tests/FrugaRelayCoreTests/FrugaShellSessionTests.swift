@@ -2,20 +2,19 @@ import XCTest
 
 @testable import FrugaRelayCore
 
-/// RED tests for issue #75 (M2-I03): content process termination recovery.
-/// Contract (not yet implemented — this file is meant to fail to compile
-/// until `ios-owner` adds `FrugaShellTransport` / `FrugaShellSession` to
-/// `FrugaRelayCore`):
+/// Tests for `FrugaShellSession`. Contract implemented for issue #75
+/// (M2-I03, content process termination recovery) in `FrugaShellSession.swift`:
 ///
 /// ```swift
-/// protocol FrugaShellTransport: AnyObject, Sendable {
+/// @MainActor
+/// protocol FrugaShellTransport: AnyObject {
 ///   func reload()
 ///   func send(_ json: Data)
 /// }
 ///
 /// @MainActor
 /// final class FrugaShellSession {
-///   init(transport: FrugaShellTransport, onError: @escaping @Sendable (FrugaError) -> Void)
+///   init(transport: FrugaShellTransport, onError: @escaping (FrugaError) -> Void)
 ///   func start(initMessage: Data)
 ///   func shellDidLoad()
 ///   func processDidTerminate()
@@ -26,6 +25,29 @@ import XCTest
 /// on every call (so a reload after termination re-sends it).
 /// `processDidTerminate()` reports `PROCESS_TERMINATED` (recoverable) via `onError`
 /// and reloads the transport, with no dedup between repeated terminations.
+///
+/// RED below for issue #76 (M2-I04, presentation and swipe-back): the
+/// additions are not yet implemented —
+///
+/// ```swift
+/// @MainActor
+/// final class FrugaShellSession {
+///   init(
+///     transport: FrugaShellTransport,
+///     onMessage: @escaping (FrugaNativeMessage) -> Void = { _ in },
+///     onError: @escaping (FrugaError) -> Void
+///   )
+///   func receive(_ json: Data)
+///     // decodes via FrugaNativeMessage.decode and calls onMessage;
+///     // malformed input is dropped — no throw, nothing called
+///   func requestBack(timeout: TimeInterval = 1.0, completion: @escaping (Bool) -> Void)
+///     // sends the encoded `back` message via transport.send, then completes
+///     // with `handled` from the next backResult; no backResult within the
+///     // timeout completes false (default: back closes Relay); a backResult
+///     // with no pending request is ignored for completion but still reaches
+///     // onMessage
+/// }
+/// ```
 @MainActor
 // `@MainActor` XCTest classes need `async` test methods for Linux SwiftPM discovery.
 final class FrugaShellSessionTests: XCTestCase {
@@ -121,6 +143,125 @@ final class FrugaShellSessionTests: XCTestCase {
     XCTAssertEqual(errors.count, 2)
     XCTAssertTrue(errors.allSatisfy { $0.code == .processTerminated && $0.recoverable })
     XCTAssertEqual(transport.reloadCount, 2)
+  }
+
+  // MARK: - 6. receive(_:) decodes a shell -> native message and forwards it.
+
+  func testReceiveDecodesAndForwardsMessage() async throws {
+    let transport = FakeTransport()
+    var received: [FrugaNativeMessage] = []
+    let session = FrugaShellSession(
+      transport: transport,
+      onMessage: { received.append($0) },
+      onError: { _ in }
+    )
+
+    session.receive(try fixture("ready.valid"))
+
+    XCTAssertEqual(received, [.ready(ReadyPayload(protocolVersion: 1, sdkVersion: "1.0.0"))])
+  }
+
+  // MARK: - 7. receive(_:) drops malformed input: no throw, nothing called.
+
+  func testReceiveDropsMalformedInput() async throws {
+    let transport = FakeTransport()
+    var received: [FrugaNativeMessage] = []
+    var errors: [FrugaError] = []
+    let session = FrugaShellSession(
+      transport: transport,
+      onMessage: { received.append($0) },
+      onError: { errors.append($0) }
+    )
+
+    session.receive(Data("not json".utf8))
+
+    XCTAssertTrue(received.isEmpty)
+    XCTAssertTrue(errors.isEmpty)
+  }
+
+  // MARK: - 8. requestBack(...) sends the encoded `back` message.
+
+  func testRequestBackSendsEncodedBackMessage() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+
+    session.requestBack { _ in }
+
+    let sentData = try XCTUnwrap(transport.sent.last)
+    let sentObject = try JSONSerialization.jsonObject(with: sentData) as? NSDictionary
+    let expectedObject = try JSONSerialization.jsonObject(with: fixture("back.valid")) as? NSDictionary
+    XCTAssertEqual(sentObject, expectedObject)
+  }
+
+  // MARK: - 9. requestBack(...) completes true when backResult reports handled.
+
+  func testRequestBackCompletesTrueWhenBackResultHandled() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    let expectation = expectation(description: "handled true")
+    var result: Bool?
+
+    session.requestBack { handled in
+      result = handled
+      expectation.fulfill()
+    }
+    session.receive(try fixture("backResult.valid")) // handled: true
+
+    await fulfillment(of: [expectation], timeout: 1.0)
+    XCTAssertEqual(result, true)
+  }
+
+  // MARK: - 10. requestBack(...) completes false when backResult reports unhandled.
+
+  func testRequestBackCompletesFalseWhenBackResultUnhandled() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    let expectation = expectation(description: "handled false")
+    var result: Bool?
+
+    session.requestBack { handled in
+      result = handled
+      expectation.fulfill()
+    }
+    session.receive(try JSONEncoder().encode(FrugaNativeMessage.backResult(BackResultPayload(handled: false))))
+
+    await fulfillment(of: [expectation], timeout: 1.0)
+    XCTAssertEqual(result, false)
+  }
+
+  // MARK: - 11. requestBack(...) completes false if no backResult arrives
+  //            within the timeout. Default outcome: back closes Relay.
+
+  func testRequestBackTimesOutToFalse() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    let expectation = expectation(description: "timeout")
+    var result: Bool?
+
+    session.requestBack(timeout: 0.05) { handled in
+      result = handled
+      expectation.fulfill()
+    }
+
+    await fulfillment(of: [expectation], timeout: 1.0)
+    XCTAssertEqual(result, false)
+  }
+
+  // MARK: - 12. An unsolicited backResult (no pending requestBack) does not
+  //            crash and is still forwarded to onMessage.
+
+  func testUnsolicitedBackResultIsIgnoredButStillForwarded() async throws {
+    let transport = FakeTransport()
+    var received: [FrugaNativeMessage] = []
+    let session = FrugaShellSession(
+      transport: transport,
+      onMessage: { received.append($0) },
+      onError: { _ in }
+    )
+
+    session.receive(try fixture("backResult.valid"))
+
+    XCTAssertEqual(received, [.backResult(BackResultPayload(handled: true))])
   }
 }
 
