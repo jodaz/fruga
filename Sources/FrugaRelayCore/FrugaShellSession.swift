@@ -10,8 +10,10 @@ public protocol FrugaShellTransport: AnyObject {
   func send(_ json: Data)
 }
 
-/// Owns the shell's load lifecycle: remembers `init` and replays it on every
-/// load, so a reload after a content process termination comes back configured.
+/// Owns the shell's load lifecycle and the inbound message stream: remembers
+/// `init` and replays it on every load (so a reload after a content process
+/// termination comes back configured), decodes what the shell sends, and
+/// resolves a pending `back` request from the shell's `backResult`.
 @MainActor
 public final class FrugaShellSession {
   private let transport: FrugaShellTransport
@@ -19,13 +21,18 @@ public final class FrugaShellSession {
   /// this synchronously on the main actor, so the sink may close over the
   /// caller's state.
   private let onError: (FrugaError) -> Void
+  private let onMessage: (FrugaNativeMessage) -> Void
   private var initMessage: Data?
+  private var pendingBack: ((Bool) -> Void)?
+  private var backTimeout: Task<Void, Never>?
 
   public init(
     transport: FrugaShellTransport,
+    onMessage: @escaping (FrugaNativeMessage) -> Void = { _ in },
     onError: @escaping (FrugaError) -> Void
   ) {
     self.transport = transport
+    self.onMessage = onMessage
     self.onError = onError
   }
 
@@ -51,5 +58,43 @@ public final class FrugaShellSession {
       )
     )
     transport.reload()
+  }
+
+  /// Trust boundary for everything the shell posts: malformed or unknown
+  /// messages are dropped, never thrown and never crashed on.
+  public func receive(_ json: Data) {
+    guard let message = try? FrugaNativeMessage.decode(json) else { return }
+    if case let .backResult(payload) = message {
+      resolveBack(payload.handled)
+    }
+    onMessage(message)
+  }
+
+  /// Asks the shell to handle a back gesture. Completes with the shell's
+  /// `handled`, or `false` if it stays silent — the default outcome is that
+  /// back closes Relay.
+  public func requestBack(timeout: TimeInterval = 1.0, completion: @escaping (Bool) -> Void) {
+    resolveBack(false)
+    guard let message = try? FrugaHostMessage.back.encode() else {
+      completion(false)
+      return
+    }
+    transport.send(message)
+    pendingBack = completion
+    backTimeout = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+      guard !Task.isCancelled else { return }
+      self?.resolveBack(false)
+    }
+  }
+
+  /// A `backResult` with no request pending is ignored here (it still reaches
+  /// `onMessage`).
+  private func resolveBack(_ handled: Bool) {
+    backTimeout?.cancel()
+    backTimeout = nil
+    guard let pendingBack else { return }
+    self.pendingBack = nil
+    pendingBack(handled)
   }
 }
