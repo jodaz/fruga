@@ -57,9 +57,15 @@ public final class FrugaRelayWebView: NSObject, FrugaShellTransport, WKNavigatio
   /// Pure, so `nonisolated`: tests call it without hopping to the main actor.
   nonisolated static func jsStringLiteral(_ json: Data) -> String? {
     guard let text = String(data: json, encoding: .utf8),
-      let escaped = try? JSONSerialization.data(withJSONObject: text, options: .fragmentsAllowed)
+      let escaped = try? JSONSerialization.data(withJSONObject: text, options: .fragmentsAllowed),
+      let literal = String(data: escaped, encoding: .utf8)
     else { return nil }
-    return String(data: escaped, encoding: .utf8)
+    // U+2028/U+2029 are legal raw inside a JSON string but terminate a line in
+    // JS source, so they would truncate the statement `evaluateJavaScript` runs.
+    return
+      literal
+      .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+      .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
   }
 }
 
