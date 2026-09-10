@@ -3,7 +3,7 @@
 import WebKit
 import XCTest
 
-import FrugaRelayCore
+@testable import FrugaRelayCore
 @testable import FrugaRelay
 
 /// RED tests for issue #78 (M2-I06): foreground TTL re-check, cancel on
@@ -96,7 +96,7 @@ final class FrugaRelayLifecycleTests: XCTestCase {
     XCTAssertEqual(firstReasons, [.initial])
 
     let coordinator = try XCTUnwrap(controller.coordinator)
-    await coordinator.lastTokenAt = Date().addingTimeInterval(-2)
+    await coordinator.markTokenDelivered(at: Date().addingTimeInterval(-2))
 
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
 
@@ -106,6 +106,58 @@ final class FrugaRelayLifecycleTests: XCTestCase {
     }
     let finalReasons = await recorder.reasons
     XCTAssertEqual(finalReasons, [.initial, .ttl], "resuming past the TTL re-requests a .ttl token")
+  }
+
+  // MARK: - RED (sdk-reviewer should-fix 3, #78): the foreground TTL refresh
+  //        must reach the shell as a `tokenUpdate`, not just call the
+  //        provider. `sendTokenUpdate` currently writes straight to the
+  //        bridge, so `session.lastSent` never observes it.
+
+  func testForegroundTtlRefreshSendsTokenUpdateThroughTheShell() async throws {
+    let controller = FrugaRelayViewController(
+      config: FrugaRelayConfig(
+        partnerKey: "partner_test_123",
+        tokenProvider: { _ in "eyJ.refreshed" },
+        options: FrugaRelayOptions(tokenTtlSeconds: 1)
+      ),
+      onError: { _ in }
+    )
+
+    controller.session.receive(
+      try JSONEncoder().encode(FrugaNativeMessage.tokenRequired(TokenRequiredPayload(reason: .initial)))
+    )
+    let initialDeadline = Date().addingTimeInterval(2.0)
+    while controller.session.lastSent == nil, Date() < initialDeadline {
+      try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    XCTAssertEqual(
+      controller.session.lastSent,
+      .tokenUpdate(TokenUpdatePayload(token: "eyJ.refreshed")),
+      "the initial token delivery should already reach the shell as a tokenUpdate"
+    )
+
+    let coordinator = try XCTUnwrap(controller.coordinator)
+    await coordinator.markTokenDelivered(at: Date().addingTimeInterval(-2))
+
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+
+    let ttlDeadline = Date().addingTimeInterval(2.0)
+    var sawTtlTokenUpdate = false
+    while !sawTtlTokenUpdate, Date() < ttlDeadline {
+      // `lastSent` only ever holds the most recent message; the TTL refresh
+      // resends the same token, so any later `tokenUpdate` observed after the
+      // notification is the one this test cares about.
+      if controller.session.lastSent == .tokenUpdate(TokenUpdatePayload(token: "eyJ.refreshed")) {
+        sawTtlTokenUpdate = true
+      } else {
+        try await Task.sleep(nanoseconds: 50_000_000)
+      }
+    }
+
+    XCTAssertTrue(
+      sawTtlTokenUpdate,
+      "the foreground TTL refresh must deliver a tokenUpdate to the shell through session.send, not only call the provider"
+    )
   }
 
   // MARK: - Closing while a token request is in flight cancels the

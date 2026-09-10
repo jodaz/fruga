@@ -374,6 +374,80 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   // MARK: - Calling FrugaRelay.open(from:) twice presents once: the second
   //        call is a no-op while a screen is already up.
 
+  // MARK: - RED (sdk-reviewer should-fix 2, #78): the shell can finish
+  //        loading before the first layout pass registers the `init`
+  //        message with the session (`viewDidLoad` starts the load;
+  //        `viewDidLayoutSubviews` is the only place `session.start` is
+  //        called). A `didFinish` that beats layout must not leave the
+  //        screen blank.
+
+  func testShellDidLoadSendsInitEvenBeforeTheFirstLayoutPass() async throws {
+    let viewController = makeViewController(config: makeConfig(), onError: { _ in })
+    viewController.loadsShellAutomatically = false
+
+    // No layout pass and no window: only `viewDidLoad` runs.
+    viewController.loadViewIfNeeded()
+    viewController.session.shellDidLoad()
+
+    XCTAssertNotNil(
+      viewController.session.lastSent,
+      "an init message must already be registered with the session by the time the shell can report shellDidLoad(), not only after the first layout pass"
+    )
+  }
+
+  // MARK: - RED (sdk-reviewer should-fix 6 coverage, #78): a shell-initiated
+  //        `openExternal` with a non-http(s) scheme must be dropped, not
+  //        handed to openExternally. `handleNavigation`'s own gate is already
+  //        covered by `testNonHttpSchemeNavigationIsDroppedNotOpenedExternally`
+  //        in FrugaRelayLifecycleTests; this covers the `session.onOpenExternal`
+  //        path the shell drives directly.
+
+  func testOpenExternalWithNonHttpSchemeIsDroppedNotOpenedExternally() async throws {
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    var opened: [URL] = []
+    controller.openExternally = { opened.append($0) }
+
+    controller.session.receive(
+      try JSONEncoder().encode(FrugaNativeMessage.openExternal(OpenExternalPayload(url: "tel:+441234567890")))
+    )
+
+    XCTAssertTrue(opened.isEmpty, "a non-http(s) scheme reaching openExternal must be dropped, not handed to openExternally")
+  }
+
+  // MARK: - RED/coverage (sdk-reviewer should-fix 7, #78): a `backResult`
+  //        arriving after the controller has already been dismissed must not
+  //        call the dismiss handler again (the `presentingViewController`
+  //        guard at the end of `presentationControllerShouldDismiss`).
+
+  func testLateBackResultAfterDismissalDoesNotDismissAgain() async throws {
+    let presenter = makeWindowRootedController()
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    controller.loadsShellAutomatically = false
+    presenter.present(controller, animated: false)
+    controller.presentationController?.delegate = controller
+    _ = try await waitUntilPresented(by: presenter)
+
+    // Arm a pending back request, then let the controller be dismissed by
+    // another path before the shell answers.
+    _ = controller.presentationControllerShouldDismiss(try XCTUnwrap(controller.presentationController))
+    presenter.dismiss(animated: false)
+    try await waitUntilDismissed(from: presenter)
+
+    var dismissed = 0
+    controller.dismissHandler = { dismissed += 1 }
+
+    controller.session.receive(
+      try JSONEncoder().encode(FrugaNativeMessage.backResult(BackResultPayload(handled: false)))
+    )
+    try await Task.sleep(nanoseconds: 500_000_000)
+
+    XCTAssertEqual(
+      dismissed,
+      0,
+      "a backResult arriving after the controller was already dismissed must not call the dismiss handler again"
+    )
+  }
+
   func testDoubleOpenPresentsOnce() async throws {
     let presenter = makeWindowRootedController()
     FrugaRelay.configure(partnerKey: "partner_test_123", tokenProvider: { _ in "eyJ.test" }, options: FrugaRelayOptions())
