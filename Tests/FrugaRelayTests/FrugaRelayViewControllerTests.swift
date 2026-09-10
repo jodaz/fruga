@@ -64,16 +64,11 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     )
   }
 
-  /// Animated dismissal never completes in the host-less macOS xctest
-  /// process (no `UIApplication`), which hung dismissal assertions. Every
-  /// controller built by this helper dismisses synchronously instead.
   private func makeViewController(
     config: FrugaRelayConfig,
     onError: @escaping (FrugaError) -> Void
   ) -> FrugaRelayViewController {
-    let controller = FrugaRelayViewController(config: config, onError: onError)
-    controller.dismissAnimated = false
-    return controller
+    FrugaRelayViewController(config: config, onError: onError)
   }
 
   private func makeWindowRootedController() -> UIViewController {
@@ -145,11 +140,12 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     FrugaRelay.configure(partnerKey: "partner_test_123", tokenProvider: { _ in "eyJ.test" }, options: FrugaRelayOptions())
     FrugaRelay.open(from: presenter, onError: { _ in })
     _ = try await waitUntilPresented(by: presenter)
+    var dismissed = 0
+    FrugaRelay.presentedController?.dismissHandler = { dismissed += 1 }
 
     FrugaRelay.close()
 
-    try await waitUntilDismissed(from: presenter)
-    XCTAssertNil(presenter.presentedViewController)
+    XCTAssertEqual(dismissed, 1)
   }
 
   // MARK: - open(from:) before configure(...) fails with BOOTSTRAP_FAILED and
@@ -189,12 +185,15 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
+    var dismissed = 0
+    controller.dismissHandler = { dismissed += 1 }
 
     _ = controller.presentationControllerShouldDismiss(try XCTUnwrap(controller.presentationController))
     controller.session.receive(try JSONEncoder().encode(FrugaNativeMessage.backResult(BackResultPayload(handled: true))))
     try await Task.sleep(nanoseconds: 500_000_000)
 
     XCTAssertNotNil(presenter.presentedViewController)
+    XCTAssertEqual(dismissed, 0)
   }
 
   // MARK: - The shell reporting the back gesture unhandled dismisses Relay.
@@ -205,14 +204,19 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
+    var dismissed = 0
+    controller.dismissHandler = { dismissed += 1 }
 
     _ = controller.presentationControllerShouldDismiss(try XCTUnwrap(controller.presentationController))
-    XCTAssertNotNil(presenter.presentedViewController, "still presented before the shell reports the gesture unhandled")
+    XCTAssertEqual(dismissed, 0, "not dismissed before the shell reports the gesture unhandled")
 
     controller.session.receive(try JSONEncoder().encode(FrugaNativeMessage.backResult(BackResultPayload(handled: false))))
 
-    try await waitUntilDismissed(from: presenter)
-    XCTAssertNil(presenter.presentedViewController, "dismissed within 2s of the shell reporting unhandled")
+    let deadline = Date().addingTimeInterval(2.0)
+    while dismissed == 0, Date() < deadline {
+      try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    XCTAssertEqual(dismissed, 1, "dismissed within 2s of the shell reporting unhandled")
   }
 
   // MARK: - A wedged shell (no backResult at all) still dismisses, once
@@ -224,17 +228,19 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
+    var dismissed = 0
+    controller.dismissHandler = { dismissed += 1 }
 
     _ = controller.presentationControllerShouldDismiss(try XCTUnwrap(controller.presentationController))
 
     try await Task.sleep(nanoseconds: 500_000_000)
-    XCTAssertNotNil(presenter.presentedViewController, "still presented at 0.5s, before the 1s requestBack timeout")
+    XCTAssertEqual(dismissed, 0, "not dismissed at 0.5s, before the 1s requestBack timeout")
 
     let deadline = Date().addingTimeInterval(2.5)
-    while presenter.presentedViewController != nil, Date() < deadline {
+    while dismissed == 0, Date() < deadline {
       try await Task.sleep(nanoseconds: 50_000_000)
     }
-    XCTAssertNil(presenter.presentedViewController, "dismissed by 2.5s once requestBack's timeout resolves to unhandled")
+    XCTAssertEqual(dismissed, 1, "dismissed by 2.5s once requestBack's timeout resolves to unhandled")
   }
 
   // MARK: - tokenRequired is wired to FrugaTokenCoordinator (blocker 5): the
