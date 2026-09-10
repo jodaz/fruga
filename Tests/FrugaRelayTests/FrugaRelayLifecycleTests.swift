@@ -117,7 +117,7 @@ final class FrugaRelayLifecycleTests: XCTestCase {
     let controller = FrugaRelayViewController(
       config: FrugaRelayConfig(
         partnerKey: "partner_test_123",
-        tokenProvider: { _ in "eyJ.refreshed" },
+        tokenProvider: { reason in reason == .ttl ? "eyJ.ttl-refreshed" : "eyJ.refreshed" },
         options: FrugaRelayOptions(tokenTtlSeconds: 1)
       ),
       onError: { _ in }
@@ -145,9 +145,9 @@ final class FrugaRelayLifecycleTests: XCTestCase {
     var sawTtlTokenUpdate = false
     while !sawTtlTokenUpdate, Date() < ttlDeadline {
       // `lastSent` only ever holds the most recent message; the TTL refresh
-      // resends the same token, so any later `tokenUpdate` observed after the
-      // notification is the one this test cares about.
-      if controller.session.lastSent == .tokenUpdate(TokenUpdatePayload(token: "eyJ.refreshed")) {
+      // sends a distinct token, so this can only pass once the refresh
+      // actually reaches the shell through `session.send`.
+      if controller.session.lastSent == .tokenUpdate(TokenUpdatePayload(token: "eyJ.ttl-refreshed")) {
         sawTtlTokenUpdate = true
       } else {
         try await Task.sleep(nanoseconds: 50_000_000)

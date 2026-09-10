@@ -374,6 +374,23 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   // MARK: - Calling FrugaRelay.open(from:) twice presents once: the second
   //        call is a no-op while a screen is already up.
 
+  func testDoubleOpenPresentsOnce() async throws {
+    let presenter = makeWindowRootedController()
+    FrugaRelay.configure(partnerKey: "partner_test_123", tokenProvider: { _ in "eyJ.test" }, options: FrugaRelayOptions())
+    var errors: [FrugaError] = []
+
+    FrugaRelay.open(from: presenter, onError: { errors.append($0) })
+    let first = try await waitUntilPresented(by: presenter)
+    FrugaRelay.open(from: presenter, onError: { errors.append($0) })
+    try await Task.sleep(nanoseconds: 200_000_000)
+
+    XCTAssertTrue(FrugaRelay.presentedController === first, "the first controller stays presented")
+    XCTAssertTrue(errors.isEmpty)
+
+    FrugaRelay.close()
+    try await waitUntilDismissed(from: presenter)
+  }
+
   // MARK: - RED (sdk-reviewer should-fix 2, #78): the shell can finish
   //        loading before the first layout pass registers the `init`
   //        message with the session (`viewDidLoad` starts the load;
@@ -446,23 +463,6 @@ final class FrugaRelayViewControllerTests: XCTestCase {
       0,
       "a backResult arriving after the controller was already dismissed must not call the dismiss handler again"
     )
-  }
-
-  func testDoubleOpenPresentsOnce() async throws {
-    let presenter = makeWindowRootedController()
-    FrugaRelay.configure(partnerKey: "partner_test_123", tokenProvider: { _ in "eyJ.test" }, options: FrugaRelayOptions())
-    var errors: [FrugaError] = []
-
-    FrugaRelay.open(from: presenter, onError: { errors.append($0) })
-    let first = try await waitUntilPresented(by: presenter)
-    FrugaRelay.open(from: presenter, onError: { errors.append($0) })
-    try await Task.sleep(nanoseconds: 200_000_000)
-
-    XCTAssertTrue(FrugaRelay.presentedController === first, "the first controller stays presented")
-    XCTAssertTrue(errors.isEmpty)
-
-    FrugaRelay.close()
-    try await waitUntilDismissed(from: presenter)
   }
 }
 
