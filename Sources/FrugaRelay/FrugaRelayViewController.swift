@@ -39,7 +39,10 @@ public final class FrugaRelayViewController: UIViewController {
     self.present(SFSafariViewController(url: url), animated: true)
   }
   /// Not `lazy`: `deinit` must be able to cancel it without creating one.
-  private var coordinator: FrugaTokenCoordinator?
+  var coordinator: FrugaTokenCoordinator?
+  /// The `init` payload the session started with, composed after the first
+  /// layout so the safe area is measured, not zeros.
+  private(set) var lastInitPayload: InitPayload?
   /// Seam for host-less test processes, where the real dismissal never
   /// completes because no app drives the transition. `nil` in an app, where
   /// `performDismiss` runs the real `dismiss(animated:)`.
@@ -91,10 +94,20 @@ public final class FrugaRelayViewController: UIViewController {
       Task { await coordinator.request(reason: reason) }
     }
     // Read through the property, so a replacement set after init is honoured.
-    session.onOpenExternal = { [weak self] url in self?.openExternally(url) }
+    // Only web URLs leave the WebView; any other scheme is dropped.
+    session.onOpenExternal = { [weak self] url in
+      guard FrugaExternalURLRule.allows(url) else { return }
+      self?.openExternally(url)
+    }
     bridge.shouldAllowNavigation = { [weak self] url, isMainFrame in
       self?.handleNavigation(to: url, isMainFrame: isMainFrame) ?? false
     }
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(applicationWillEnterForeground),
+      name: UIApplication.willEnterForegroundNotification,
+      object: nil
+    )
   }
 
   @available(*, unavailable)
@@ -103,6 +116,7 @@ public final class FrugaRelayViewController: UIViewController {
   }
 
   deinit {
+    NotificationCenter.default.removeObserver(self)
     // The provider is cancelled on close; this is the belt-and-braces path for
     // a controller that is released without ever being dismissed.
     if let coordinator {
@@ -130,9 +144,27 @@ public final class FrugaRelayViewController: UIViewController {
       webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
     ])
 
+    webView.load(URLRequest(url: FrugaRelayVersion.shellURL))
+  }
+
+  public override func viewWillAppear(_ animated: Bool) {
+    super.viewWillAppear(animated)
+    // Wired here rather than at the presenting call site, so every presenter
+    // gets the ask-the-shell-first swipe-down behaviour.
+    presentationController?.delegate = self
+  }
+
+  /// The safe area is only real once the view has been laid out in its window,
+  /// so `init` is composed here rather than in `viewDidLoad` (where the insets
+  /// are still zeros). The session only sends it when the shell finishes
+  /// loading, which is always later than the first layout pass.
+  public override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    guard lastInitPayload == nil else { return }
     let payload = config.makeInitPayload(safeArea: currentSafeArea(), token: nil)
     do {
       session.start(initMessage: try FrugaHostMessage.`init`(payload).encode())
+      lastInitPayload = payload
     } catch {
       // Nothing can be mounted without an `init`, so this is terminal, not silent.
       onError(
@@ -142,9 +174,7 @@ public final class FrugaRelayViewController: UIViewController {
           recoverable: false
         )
       )
-      return
     }
-    webView.load(URLRequest(url: FrugaRelayVersion.shellURL))
   }
 
   public override func viewDidDisappear(_ animated: Bool) {
@@ -162,8 +192,22 @@ public final class FrugaRelayViewController: UIViewController {
     case .allow:
       return true
     case .openExternally:
-      openExternally(url)
+      // Non-web schemes are dropped rather than handed to the system.
+      if FrugaExternalURLRule.allows(url) { openExternally(url) }
       return false
+    }
+  }
+
+  /// Connectivity changed: tell the shell.
+  func networkDidChange(online: Bool) {
+    session.send(.network(NetworkPayload(online: online)))
+  }
+
+  @objc private func applicationWillEnterForeground() {
+    guard let ttl = config.options.tokenTtlSeconds, let coordinator else { return }
+    Task {
+      guard await coordinator.needsRefresh(ttl: ttl, now: Date()) else { return }
+      await coordinator.request(reason: .ttl)
     }
   }
 
@@ -172,7 +216,7 @@ public final class FrugaRelayViewController: UIViewController {
     bridge.send(message)
   }
 
-  private func currentSafeArea() -> SafeArea {
+  func currentSafeArea() -> SafeArea {
     let insets = view.safeAreaInsets
     return SafeArea(
       top: Int(insets.top),

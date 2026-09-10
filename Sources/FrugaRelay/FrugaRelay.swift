@@ -1,6 +1,8 @@
 import FrugaRelayCore
 
 #if canImport(UIKit) && canImport(WebKit)
+import Foundation
+import Network
 import UIKit
 #endif
 
@@ -19,6 +21,29 @@ extension FrugaRelay {
   /// Test-only: the controller `open(from:onError:)` presented, if still up.
   @MainActor static var presentedController: FrugaRelayViewController? { presented }
 
+  /// Connectivity, as last reported by the path monitor. Overridable in tests;
+  /// optimistic until the monitor's first update so a mount is never refused
+  /// on a cold start.
+  @MainActor static var isOnline = true
+  @MainActor private static var monitor: NWPathMonitor?
+
+  /// One monitor for the process: connectivity changes update `isOnline` and
+  /// reach the presented screen as a `network` message.
+  @MainActor
+  private static func startMonitoringNetwork() {
+    guard monitor == nil else { return }
+    let monitor = NWPathMonitor()
+    self.monitor = monitor
+    monitor.pathUpdateHandler = { path in
+      let online = path.status == .satisfied
+      Task { @MainActor in
+        isOnline = online
+        presented?.networkDidChange(online: online)
+      }
+    }
+    monitor.start(queue: DispatchQueue(label: "co.uk.fruga.relay.network"))
+  }
+
   /// Call once at app start, before `open(from:onError:)`.
   @MainActor
   public static func configure(
@@ -27,6 +52,7 @@ extension FrugaRelay {
     options: FrugaRelayOptions = FrugaRelayOptions()
   ) {
     config = FrugaRelayConfig(partnerKey: partnerKey, tokenProvider: tokenProvider, options: options)
+    startMonitoringNetwork()
   }
 
   /// Presents the Relay screen as a page sheet from `presenter`.
@@ -42,11 +68,15 @@ extension FrugaRelay {
       )
       return
     }
+    // A second open while a screen is already up is a no-op, not a second sheet.
+    guard presented == nil else { return }
+    guard isOnline else {
+      onError(FrugaError(code: .offline, message: "The device is offline", recoverable: true))
+      return
+    }
     let controller = FrugaRelayViewController(config: config, onError: onError)
     presented = controller
     presenter.present(controller, animated: true)
-    // UIKit creates the presentation controller during `present`.
-    controller.presentationController?.delegate = controller
   }
 
   /// Dismisses the Relay screen, if one is up.

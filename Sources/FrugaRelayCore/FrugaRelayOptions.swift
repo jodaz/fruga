@@ -9,6 +9,9 @@ public struct FrugaRelayOptions: Equatable, Sendable {
   public var userId: String?
   public var apiBaseUrl: String?
   public var locale: String?
+  /// How long a delivered token stays fresh. `nil` means no foreground
+  /// re-check. Mirrors Android's `FrugaRelayOptions.tokenTtlSeconds`.
+  public var tokenTtlSeconds: TimeInterval?
   public var debug: Bool
 
   public init(
@@ -17,6 +20,7 @@ public struct FrugaRelayOptions: Equatable, Sendable {
     userId: String? = nil,
     apiBaseUrl: String? = nil,
     locale: String? = nil,
+    tokenTtlSeconds: TimeInterval? = nil,
     debug: Bool = false
   ) {
     self.theme = theme
@@ -24,6 +28,7 @@ public struct FrugaRelayOptions: Equatable, Sendable {
     self.userId = userId
     self.apiBaseUrl = apiBaseUrl
     self.locale = locale
+    self.tokenTtlSeconds = tokenTtlSeconds
     self.debug = debug
   }
 }

@@ -29,6 +29,8 @@ public final class FrugaShellSession {
   /// screen, which hands it to the same system browser component the
   /// navigation allowlist uses.
   public var onOpenExternal: ((URL) -> Void)?
+  /// The last message handed to `send(_:)`, for tests and diagnostics.
+  public private(set) var lastSent: FrugaHostMessage?
   private var initMessage: Data?
   private var pendingBack: ((Bool) -> Void)?
   private var backTimeout: Task<Void, Never>?
@@ -46,6 +48,14 @@ public final class FrugaShellSession {
   /// Remembers the `init` message. It is sent on the next `shellDidLoad()`.
   public func start(initMessage: Data) {
     self.initMessage = initMessage
+  }
+
+  /// Encodes and forwards a host message. An unencodable message is dropped,
+  /// like any other malformed bridge traffic.
+  public func send(_ message: FrugaHostMessage) {
+    guard let json = try? message.encode() else { return }
+    lastSent = message
+    transport.send(json)
   }
 
   /// The shell page finished loading — first load or any reload.

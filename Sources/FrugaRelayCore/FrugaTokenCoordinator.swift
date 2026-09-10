@@ -25,6 +25,11 @@ public actor FrugaTokenCoordinator {
   private let onToken: @Sendable (String) -> Void
   private let onError: @Sendable (FrugaError) -> Void
   private var inFlight: Task<Void, Never>?
+  /// When a token was last delivered to `onToken`, for the foreground TTL
+  /// re-check. `nonisolated(unsafe)`: a `Date?` write is atomic enough for a
+  /// staleness check, and the screen reads it from the main actor.
+  // ponytail: plain stored Date?, revisit if it ever needs to be transactional
+  nonisolated(unsafe) public var lastTokenAt: Date?
 
   public init(
     provider: @escaping FrugaTokenProvider,
@@ -42,6 +47,7 @@ public actor FrugaTokenCoordinator {
       do {
         let token = try await provider(reason)
         guard !Task.isCancelled else { return }
+        self.lastTokenAt = Date()
         onToken(token)
       } catch is CancellationError {
         return
@@ -58,6 +64,13 @@ public actor FrugaTokenCoordinator {
       }
       self.finish()
     }
+  }
+
+  /// `true` once the last delivered token is older than `ttl`. No token yet
+  /// means nothing to refresh.
+  public func needsRefresh(ttl: TimeInterval, now: Date) -> Bool {
+    guard let lastTokenAt else { return false }
+    return now.timeIntervalSince(lastTokenAt) >= ttl
   }
 
   public func cancel() {
