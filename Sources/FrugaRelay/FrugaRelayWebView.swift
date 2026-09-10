@@ -11,7 +11,7 @@ import WebKit
 /// `WKWebView.navigationDelegate` is weak, so the host must retain this object
 /// for as long as the WebView is on screen.
 @MainActor
-public final class FrugaRelayWebView: NSObject, FrugaShellTransport, WKNavigationDelegate {
+public final class FrugaRelayWebView: NSObject, FrugaShellTransport, @preconcurrency WKNavigationDelegate {
   public let webView: WKWebView
   /// Weak: `FrugaShellSession` holds its transport strongly.
   private weak var session: FrugaShellSession?

@@ -40,6 +40,9 @@ public final class FrugaRelayViewController: UIViewController {
   }
   /// Not `lazy`: `deinit` must be able to cancel it without creating one.
   private var coordinator: FrugaTokenCoordinator?
+  /// Seam for host-less test processes, where an animated dismissal never
+  /// completes because no app drives the transition. Always `true` in an app.
+  var dismissAnimated: Bool = true
 
   public init(config: FrugaRelayConfig, onError: @escaping (FrugaError) -> Void) {
     let configuration = WKWebViewConfiguration()
@@ -82,26 +85,6 @@ public final class FrugaRelayViewController: UIViewController {
     bridge.shouldAllowNavigation = { [weak self] url, isMainFrame in
       self?.handleNavigation(to: url, isMainFrame: isMainFrame) ?? false
     }
-  }
-
-  /// Test support for #77's navigation cases, which build the screen from a
-  /// raw `InitPayload`. The provider is never called.
-  convenience init(initPayload: InitPayload, onError: @escaping (FrugaError) -> Void) {
-    self.init(
-      config: FrugaRelayConfig(
-        partnerKey: initPayload.partnerKey,
-        tokenProvider: { _ in throw CancellationError() },
-        options: FrugaRelayOptions(
-          theme: initPayload.theme,
-          primaryColor: initPayload.primaryColor,
-          userId: initPayload.userId,
-          apiBaseUrl: initPayload.apiBaseUrl,
-          locale: initPayload.locale,
-          debug: initPayload.debug
-        )
-      ),
-      onError: onError
-    )
   }
 
   @available(*, unavailable)
@@ -201,7 +184,7 @@ extension FrugaRelayViewController: UIAdaptivePresentationControllerDelegate {
       // `dismiss` on a controller that is no longer presented walks up to its
       // presenter, so a late answer must not close someone else's screen.
       guard !handled, let self, self.presentingViewController != nil else { return }
-      self.dismiss(animated: true)
+      self.dismiss(animated: self.dismissAnimated)
     }
     return false
   }

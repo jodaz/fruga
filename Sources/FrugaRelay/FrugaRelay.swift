@@ -49,7 +49,7 @@ extension FrugaRelay {
   /// Dismisses the Relay screen, if one is up.
   @MainActor
   public static func close() {
-    presented?.dismiss(animated: true)
+    presented?.dismiss(animated: presented?.dismissAnimated ?? true)
     presented = nil
   }
 
