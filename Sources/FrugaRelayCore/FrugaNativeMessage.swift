@@ -77,7 +77,7 @@ public struct ReadyPayload: Codable, Equatable {
 }
 
 public struct TokenRequiredPayload: Codable, Equatable {
-  public enum Reason: String, Codable {
+  public enum Reason: String, Codable, Sendable {
     case initial, ttl, unauthorized
   }
 
@@ -98,7 +98,7 @@ public struct BackResultPayload: Codable, Equatable {
 }
 
 public struct ErrorPayload: Codable, Equatable {
-  public enum Code: String, Codable {
+  public enum Code: String, Codable, Sendable {
     case timeout = "TIMEOUT"
     case versionMismatch = "VERSION_MISMATCH"
     case bootstrapFailed = "BOOTSTRAP_FAILED"
