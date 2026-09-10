@@ -3,7 +3,7 @@
 import WebKit
 import XCTest
 
-import FrugaRelayCore
+@testable import FrugaRelayCore
 @testable import FrugaRelay
 
 /// RED tests for issue #76 (M2-I04), covering the sdk-reviewer blockers on
@@ -408,7 +408,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     controller.openExternally = { opened.append($0) }
 
     controller.session.receive(
-      try JSONEncoder().encode(FrugaNativeMessage.openExternal(OpenExternalPayload(url: "tel:+441234567890")))
+      Data(#"{"type":"openExternal","url":"tel:+441234567890"}"#.utf8)
     )
 
     XCTAssertTrue(opened.isEmpty, "a non-http(s) scheme reaching openExternal must be dropped, not handed to openExternally")
