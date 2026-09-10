@@ -27,6 +27,7 @@ import XCTest
 /// `processDidTerminate()` reports `PROCESS_TERMINATED` (recoverable) via `onError`
 /// and reloads the transport, with no dedup between repeated terminations.
 @MainActor
+// `@MainActor` XCTest classes need `async` test methods for Linux SwiftPM discovery.
 final class FrugaShellSessionTests: XCTestCase {
   private func fixture(_ name: String) throws -> Data {
     let url = try XCTUnwrap(
@@ -38,7 +39,7 @@ final class FrugaShellSessionTests: XCTestCase {
 
   // MARK: - 1. start(initMessage:) + shellDidLoad() sends the remembered init.
 
-  func testShellDidLoadSendsRememberedInit() throws {
+  func testShellDidLoadSendsRememberedInit() async throws {
     let initMessage = try fixture("init.valid")
     let transport = FakeTransport()
     var errors: [FrugaError] = []
@@ -54,7 +55,7 @@ final class FrugaShellSessionTests: XCTestCase {
   // MARK: - 2. shellDidLoad() replays the same init on every call (a reload
   //           must re-send it, not just the first load).
 
-  func testShellDidLoadReplaysInitOnEveryCall() throws {
+  func testShellDidLoadReplaysInitOnEveryCall() async throws {
     let initMessage = try fixture("init.valid")
     let transport = FakeTransport()
     let session = FrugaShellSession(transport: transport, onError: { _ in })
@@ -70,7 +71,7 @@ final class FrugaShellSessionTests: XCTestCase {
   // MARK: - 3. processDidTerminate() emits PROCESS_TERMINATED (recoverable)
   //           and reloads the transport.
 
-  func testProcessDidTerminateEmitsErrorAndReloads() throws {
+  func testProcessDidTerminateEmitsErrorAndReloads() async throws {
     let initMessage = try fixture("init.valid")
     let transport = FakeTransport()
     var errors: [FrugaError] = []
@@ -88,7 +89,7 @@ final class FrugaShellSessionTests: XCTestCase {
   // MARK: - 4. Reload after termination replays the remembered init once the
   //           shell finishes loading again.
 
-  func testInitIsReplayedAfterTerminationReload() throws {
+  func testInitIsReplayedAfterTerminationReload() async throws {
     let initMessage = try fixture("init.valid")
     let transport = FakeTransport()
     let session = FrugaShellSession(transport: transport, onError: { _ in })
@@ -107,7 +108,7 @@ final class FrugaShellSessionTests: XCTestCase {
   // MARK: - 5. No dedup: repeated terminations each report an error and
   //           each reload the transport.
 
-  func testRepeatedTerminationsAreNotDeduped() throws {
+  func testRepeatedTerminationsAreNotDeduped() async throws {
     let initMessage = try fixture("init.valid")
     let transport = FakeTransport()
     var errors: [FrugaError] = []
