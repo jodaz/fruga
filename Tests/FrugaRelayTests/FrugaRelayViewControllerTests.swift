@@ -64,6 +64,18 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     )
   }
 
+  /// Animated dismissal never completes in the host-less macOS xctest
+  /// process (no `UIApplication`), which hung dismissal assertions. Every
+  /// controller built by this helper dismisses synchronously instead.
+  private func makeViewController(
+    config: FrugaRelayConfig,
+    onError: @escaping (FrugaError) -> Void
+  ) -> FrugaRelayViewController {
+    let controller = FrugaRelayViewController(config: config, onError: onError)
+    controller.dismissAnimated = false
+    return controller
+  }
+
   private func makeWindowRootedController() -> UIViewController {
     let controller = UIViewController()
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -91,7 +103,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   // MARK: - The WebView is mounted and loads the CDN shell.
 
   func testWebViewIsAddedAsSubview() async throws {
-    let viewController = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
+    let viewController = makeViewController(config: makeConfig(), onError: { _ in })
 
     viewController.loadViewIfNeeded()
 
@@ -99,7 +111,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   }
 
   func testWebViewLoadsTheCdnShellUrl() async throws {
-    let viewController = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
+    let viewController = makeViewController(config: makeConfig(), onError: { _ in })
 
     viewController.loadViewIfNeeded()
 
@@ -159,7 +171,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
 
   func testDismissDecisionAsksTheShellAndReturnsFalse() async throws {
     let presenter = makeWindowRootedController()
-    let controller = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -173,7 +185,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
 
   func testDismissDecisionStaysPresentedWhenShellReportsHandled() async throws {
     let presenter = makeWindowRootedController()
-    let controller = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -189,7 +201,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
 
   func testDismissDecisionDismissesWhenShellReportsUnhandled() async throws {
     let presenter = makeWindowRootedController()
-    let controller = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -208,7 +220,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
 
   func testDismissDecisionDismissesAfterTimeoutWithNoBackResult() async throws {
     let presenter = makeWindowRootedController()
-    let controller = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
     presenter.present(controller, animated: false)
     controller.presentationController?.delegate = controller
     _ = try await waitUntilPresented(by: presenter)
@@ -231,7 +243,7 @@ final class FrugaRelayViewControllerTests: XCTestCase {
   func testTokenRequiredCallsProviderWithReason() async throws {
     let presenter = makeWindowRootedController()
     let recorder = RecordingTokenProvider()
-    let controller = FrugaRelayViewController(
+    let controller = makeViewController(
       config: makeConfig(tokenProvider: { reason in await recorder.provide(reason) }),
       onError: { _ in }
     )
