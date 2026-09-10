@@ -263,6 +263,28 @@ final class FrugaShellSessionTests: XCTestCase {
 
     XCTAssertEqual(received, [.backResult(BackResultPayload(handled: true))])
   }
+
+  // MARK: - 13. receive(_:) of an openExternal message invokes onOpenExternal
+  //            with the fixture URL and still forwards to onMessage (#77,
+  //            M2-I05, navigation allowlist). RED: `onOpenExternal` does not
+  //            exist yet on `FrugaShellSession`.
+
+  func testReceiveOpenExternalInvokesOnOpenExternalAndForwards() async throws {
+    let transport = FakeTransport()
+    var received: [FrugaNativeMessage] = []
+    var openedURLs: [URL] = []
+    let session = FrugaShellSession(
+      transport: transport,
+      onMessage: { received.append($0) },
+      onError: { _ in }
+    )
+    session.onOpenExternal = { openedURLs.append($0) }
+
+    session.receive(try fixture("openExternal.valid"))
+
+    XCTAssertEqual(openedURLs, [URL(string: "https://example.com/terms")!])
+    XCTAssertEqual(received, [.openExternal(OpenExternalPayload(url: "https://example.com/terms"))])
+  }
 }
 
 // MARK: - Test double
