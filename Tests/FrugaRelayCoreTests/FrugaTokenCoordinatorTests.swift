@@ -210,7 +210,8 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
     await provider.resolve(.success("token"))
     await recorder.waitForToken()
 
-    let deliveredAt = try XCTUnwrap(await coordinator.lastTokenAt)
+    let stored = await coordinator.lastTokenAt
+    let deliveredAt = try XCTUnwrap(stored)
 
     let withinTtl = await coordinator.needsRefresh(ttl: 60, now: deliveredAt.addingTimeInterval(10))
     XCTAssertFalse(withinTtl)
