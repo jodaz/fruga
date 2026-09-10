@@ -198,8 +198,10 @@ extension FrugaRelayViewController: UIAdaptivePresentationControllerDelegate {
   /// shell stays silent, so a wedged shell still closes).
   public func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool {
     session.requestBack { [weak self] handled in
-      guard !handled else { return }
-      self?.dismiss(animated: true)
+      // `dismiss` on a controller that is no longer presented walks up to its
+      // presenter, so a late answer must not close someone else's screen.
+      guard !handled, let self, self.presentingViewController != nil else { return }
+      self.dismiss(animated: true)
     }
     return false
   }

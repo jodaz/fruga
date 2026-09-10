@@ -86,7 +86,10 @@ public final class FrugaShellSession {
   /// `handled`, or `false` if it stays silent — the default outcome is that
   /// back closes Relay.
   public func requestBack(timeout: TimeInterval = 1.0, completion: @escaping (Bool) -> Void) {
-    resolveBack(false)
+    // A repeat ask while the shell is still deciding is dropped, not resolved
+    // as unhandled: a second sheet drag must never dismiss a screen the shell
+    // asked to keep, and the shell must not be spammed with `back`.
+    guard pendingBack == nil else { return }
     guard let message = try? FrugaHostMessage.back.encode() else {
       completion(false)
       return
