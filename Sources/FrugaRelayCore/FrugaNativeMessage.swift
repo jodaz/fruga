@@ -82,6 +82,10 @@ public struct TokenRequiredPayload: Codable, Equatable {
   }
 
   public let reason: Reason
+
+  public init(reason: Reason) {
+    self.reason = reason
+  }
 }
 
 public struct BalancePayload: Codable, Equatable {
@@ -95,6 +99,10 @@ public struct OpenExternalPayload: Codable, Equatable {
 
 public struct BackResultPayload: Codable, Equatable {
   public let handled: Bool
+
+  public init(handled: Bool) {
+    self.handled = handled
+  }
 }
 
 public struct ErrorPayload: Codable, Equatable {

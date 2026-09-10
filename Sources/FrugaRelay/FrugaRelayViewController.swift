@@ -4,32 +4,34 @@ import FrugaRelayCore
 import UIKit
 import WebKit
 
-/// Hosts the CDN shell full screen. Owns the `WKWebView`, the `fruga` script
-/// message handler the shell posts to, and the `FrugaShellSession` that drives
-/// the bridge.
+/// Hosts the CDN shell in a page sheet. Owns the `WKWebView`, the `fruga`
+/// script message handler the shell posts to, the `FrugaShellSession` that
+/// drives the bridge, and the `FrugaTokenCoordinator` that answers the shell's
+/// `tokenRequired`.
 ///
 /// Swipe-down / sheet pull never dismisses directly: it asks the shell first
 /// (`back`) and only dismisses when the shell reports the gesture unhandled.
 public final class FrugaRelayViewController: UIViewController {
   /// The shell's script message handler name (`window.webkit.messageHandlers.fruga`).
   private static let handlerName = "fruga"
-  private static let shellURL = URL(
-    string: "https://cdn.fruga.co.uk/v/\(FrugaRelayVersion.shell)/native/index.html"
-  )
 
   let webView: WKWebView
   let session: FrugaShellSession
   /// Retained: `WKWebView.navigationDelegate` is weak.
   private let bridge: FrugaRelayWebView
   private let messageProxy: ScriptMessageProxy
-  private let initPayload: InitPayload
+  private let config: FrugaRelayConfig
+  private let onError: (FrugaError) -> Void
+  /// Not `lazy`: `deinit` must be able to cancel it without creating one.
+  private var coordinator: FrugaTokenCoordinator?
 
-  public init(initPayload: InitPayload, onError: @escaping (FrugaError) -> Void) {
+  public init(config: FrugaRelayConfig, onError: @escaping (FrugaError) -> Void) {
     let configuration = WKWebViewConfiguration()
     let proxy = ScriptMessageProxy()
     configuration.userContentController.add(proxy, name: Self.handlerName)
 
-    self.initPayload = initPayload
+    self.config = config
+    self.onError = onError
     messageProxy = proxy
     webView = WKWebView(frame: .zero, configuration: configuration)
     bridge = FrugaRelayWebView(webView: webView)
@@ -39,7 +41,25 @@ public final class FrugaRelayViewController: UIViewController {
     bridge.attach(session: session)
     // Weak, so the WebView's content controller does not retain this controller.
     proxy.session = session
-    modalPresentationStyle = .fullScreen
+    // A page sheet, not `.fullScreen`: `.fullScreen` never asks its delegate
+    // whether it should dismiss, so swipe-down could not consult the shell.
+    modalPresentationStyle = .pageSheet
+
+    // The coordinator's callbacks may resolve off-main; they hop back before
+    // touching the WebView or the partner sink.
+    let coordinator = FrugaTokenCoordinator(
+      provider: config.tokenProvider,
+      onToken: { [weak self] token in
+        Task { @MainActor in self?.sendTokenUpdate(token) }
+      },
+      onError: { [weak self] error in
+        Task { @MainActor in self?.onError(error) }
+      }
+    )
+    self.coordinator = coordinator
+    session.onTokenRequired = { reason in
+      Task { await coordinator.request(reason: reason) }
+    }
   }
 
   @available(*, unavailable)
@@ -48,6 +68,11 @@ public final class FrugaRelayViewController: UIViewController {
   }
 
   deinit {
+    // The provider is cancelled on close; this is the belt-and-braces path for
+    // a controller that is released without ever being dismissed.
+    if let coordinator {
+      Task { await coordinator.cancel() }
+    }
     // The content controller retains its handlers for as long as the WebView
     // lives. `deinit` is nonisolated and the WebView is main-actor state, so
     // only touch it when UIKit deallocates us on the main thread (it does);
@@ -69,15 +94,45 @@ public final class FrugaRelayViewController: UIViewController {
       webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
     ])
-    // Harmless when the presentation controller does not exist yet; `open` sets
-    // it again once UIKit has created one.
-    presentationController?.delegate = self
 
-    if let message = try? FrugaHostMessage.`init`(initPayload).encode() {
-      session.start(initMessage: message)
+    let payload = config.makeInitPayload(safeArea: currentSafeArea(), token: nil)
+    do {
+      session.start(initMessage: try FrugaHostMessage.`init`(payload).encode())
+    } catch {
+      // Nothing can be mounted without an `init`, so this is terminal, not silent.
+      onError(
+        FrugaError(
+          code: .bootstrapFailed,
+          message: "Could not encode the init message: \(type(of: error))",
+          recoverable: false
+        )
+      )
+      return
     }
-    guard let shellURL = Self.shellURL else { return }
-    webView.load(URLRequest(url: shellURL))
+    webView.load(URLRequest(url: FrugaRelayVersion.shellURL))
+  }
+
+  public override func viewDidDisappear(_ animated: Bool) {
+    super.viewDidDisappear(animated)
+    guard isBeingDismissed, let coordinator else { return }
+    Task { await coordinator.cancel() }
+  }
+
+  // MARK: - Internal
+
+  private func sendTokenUpdate(_ token: String) {
+    guard let message = try? FrugaHostMessage.tokenUpdate(TokenUpdatePayload(token: token)).encode() else { return }
+    bridge.send(message)
+  }
+
+  private func currentSafeArea() -> SafeArea {
+    let insets = view.safeAreaInsets
+    return SafeArea(
+      top: Int(insets.top),
+      right: Int(insets.right),
+      bottom: Int(insets.bottom),
+      left: Int(insets.left)
+    )
   }
 }
 

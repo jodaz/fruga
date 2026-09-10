@@ -50,9 +50,15 @@ public enum FrugaHostMessage: Encodable, Equatable, Sendable {
 /// Absent optionals are omitted from the JSON, never sent as `null` — the
 /// synthesised encoder uses `encodeIfPresent` for each optional.
 public struct InitPayload: Encodable, Equatable, Sendable {
+  /// Wire values are lowercase; a raw `String` would let a typo reach the
+  /// shell's validator. Mirrors Android's `FrugaHostMessage.Theme`.
+  public enum Theme: String, Codable, Equatable, Sendable {
+    case light, dark
+  }
+
   public let partnerKey: String
   public let token: String?
-  public let theme: String?
+  public let theme: Theme?
   public let primaryColor: String?
   public let userId: String?
   public let apiBaseUrl: String?
@@ -63,7 +69,7 @@ public struct InitPayload: Encodable, Equatable, Sendable {
   public init(
     partnerKey: String,
     token: String? = nil,
-    theme: String? = nil,
+    theme: Theme? = nil,
     primaryColor: String? = nil,
     userId: String? = nil,
     apiBaseUrl: String? = nil,

@@ -22,6 +22,9 @@ public final class FrugaShellSession {
   /// caller's state.
   private let onError: (FrugaError) -> Void
   private let onMessage: (FrugaNativeMessage) -> Void
+  /// The shell asked for a token. Set by the screen, which forwards the reason
+  /// to its `FrugaTokenCoordinator`. Main-actor, like everything else here.
+  public var onTokenRequired: ((TokenRequiredPayload.Reason) -> Void)?
   private var initMessage: Data?
   private var pendingBack: ((Bool) -> Void)?
   private var backTimeout: Task<Void, Never>?
@@ -64,8 +67,10 @@ public final class FrugaShellSession {
   /// messages are dropped, never thrown and never crashed on.
   public func receive(_ json: Data) {
     guard let message = try? FrugaNativeMessage.decode(json) else { return }
-    if case let .backResult(payload) = message {
-      resolveBack(payload.handled)
+    switch message {
+    case let .backResult(payload): resolveBack(payload.handled)
+    case let .tokenRequired(payload): onTokenRequired?(payload.reason)
+    default: break
     }
     onMessage(message)
   }
