@@ -8,6 +8,7 @@ jobs:
   core:
     runs-on: ubuntu-latest
     container: swift:6.0
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +20,7 @@ jobs:
 
   ios:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +42,11 @@ jobs:
           echo "DEST_ID=$DEST_ID" >> "$GITHUB_ENV"
           xcrun simctl list devices available | grep "$DEST_ID"
 
+      - name: Report runner core count
+        run: |
+          echo "cores: $(sysctl -n hw.ncpu)"
+
       - name: Test
-        run: xcodebuild -scheme FrugaRelay -destination "id=$DEST_ID" test
+        run: xcodebuild -scheme FrugaRelay -destination "id=$DEST_ID" -test-timeouts-enabled YES -default-test-execution-time-allowance 120 test
         env:
           CODE_SIGNING_ALLOWED: NO
