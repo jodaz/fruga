@@ -152,6 +152,72 @@ final class FrugaTokenCoordinatorTests: XCTestCase {
     XCTAssertTrue(tokens.isEmpty)
     XCTAssertTrue(errors.isEmpty, "CancellationError must not become TOKEN_PROVIDER_FAILED")
   }
+
+  // MARK: - 6. RED for issue #78 (M2-I06, foreground TTL re-check): lastTokenAt
+  //           is nil until a token is delivered to onToken. Contract (not yet
+  //           implemented):
+  //
+  //           `public var lastTokenAt: Date? { get set }` on the actor,
+  //           set when `request(reason:)` delivers a token via `onToken`.
+
+  func testLastTokenAtIsNilUntilTokenDelivered() async {
+    let provider = FakeProvider()
+    let recorder = Recorder()
+    let coordinator = FrugaTokenCoordinator(
+      provider: { try await provider.provide($0) },
+      onToken: { token in Task { await recorder.recordToken(token) } },
+      onError: { error in Task { await recorder.recordError(error) } }
+    )
+
+    let beforeDelivery = await coordinator.lastTokenAt
+    XCTAssertNil(beforeDelivery)
+
+    await coordinator.request(reason: .initial)
+    await provider.waitForCall()
+    await provider.resolve(.success("token"))
+    await recorder.waitForToken()
+
+    let afterDelivery = await coordinator.lastTokenAt
+    XCTAssertNotNil(afterDelivery)
+  }
+
+  // MARK: - 7. RED for issue #78: needsRefresh(ttl:now:) is false before any
+  //           token, false within the TTL, true once the TTL has elapsed.
+  //           Contract: `public func needsRefresh(ttl: TimeInterval, now: Date) -> Bool`.
+
+  func testNeedsRefreshBeforeAnyTokenIsFalse() async {
+    let coordinator = FrugaTokenCoordinator(
+      provider: { _ in "unused" },
+      onToken: { _ in },
+      onError: { _ in }
+    )
+
+    let needsRefresh = await coordinator.needsRefresh(ttl: 60, now: Date())
+    XCTAssertFalse(needsRefresh, "no token has been delivered yet, so there is nothing to refresh")
+  }
+
+  func testNeedsRefreshWithinTtlIsFalseAndPastTtlIsTrue() async throws {
+    let provider = FakeProvider()
+    let recorder = Recorder()
+    let coordinator = FrugaTokenCoordinator(
+      provider: { try await provider.provide($0) },
+      onToken: { token in Task { await recorder.recordToken(token) } },
+      onError: { _ in }
+    )
+
+    await coordinator.request(reason: .initial)
+    await provider.waitForCall()
+    await provider.resolve(.success("token"))
+    await recorder.waitForToken()
+
+    let deliveredAt = try XCTUnwrap(await coordinator.lastTokenAt)
+
+    let withinTtl = await coordinator.needsRefresh(ttl: 60, now: deliveredAt.addingTimeInterval(10))
+    XCTAssertFalse(withinTtl)
+
+    let pastTtl = await coordinator.needsRefresh(ttl: 60, now: deliveredAt.addingTimeInterval(120))
+    XCTAssertTrue(pastTtl)
+  }
 }
 
 // MARK: - Test doubles

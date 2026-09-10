@@ -267,6 +267,88 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     let reasons = await recorder.reasons
     XCTAssertEqual(reasons, [.initial])
   }
+
+  // MARK: - RED for issue #78 (M2-I06). Additional contract on top of the
+  // block above (not yet implemented):
+  //
+  // ```swift
+  // public final class FrugaRelayViewController: UIViewController {
+  //   var lastInitPayload: InitPayload? { get }   // internal, for tests
+  //   func currentSafeArea() -> SafeArea            // internal (was private), for tests
+  // }
+  //
+  // public enum FrugaRelay {
+  //   public static func open(from presenter: UIViewController, onError: @escaping (FrugaError) -> Void)
+  //     // a second open() while one is already presented is a no-op: the
+  //     // existing controller stays presented, no second present(), no error
+  // }
+  // ```
+  //
+  // Swipe-back delegate wiring moves from `FrugaRelay.open` into the
+  // controller itself (`viewWillAppear` or `init`), per the #76 review.
+
+  // MARK: - The InitPayload the session started with carries the safe area
+  //        measured at load, not a hardcoded value.
+
+  func testInitPayloadCarriesSafeAreaMeasuredAtLoad() async throws {
+    let presenter = makeWindowRootedController()
+    let viewController = makeViewController(config: makeConfig(), onError: { _ in })
+
+    presenter.present(viewController, animated: false)
+    _ = try await waitUntilPresented(by: presenter)
+
+    let payload = try XCTUnwrap(viewController.lastInitPayload)
+
+    XCTAssertEqual(payload.safeArea, viewController.currentSafeArea())
+  }
+
+  // MARK: - additionalSafeAreaInsets set before layout are reflected by
+  //        currentSafeArea() (not zeros).
+
+  func testCurrentSafeAreaReflectsAdditionalSafeAreaInsets() async throws {
+    let viewController = makeViewController(config: makeConfig(), onError: { _ in })
+    viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 10, left: 0, bottom: 20, right: 0)
+
+    viewController.loadViewIfNeeded()
+    viewController.view.layoutIfNeeded()
+
+    let safeArea = viewController.currentSafeArea()
+
+    XCTAssertEqual(safeArea, SafeArea(top: 10, right: 0, bottom: 20, left: 0))
+  }
+
+  // MARK: - The swipe-back delegate is wired by the controller itself, not
+  //        only by FrugaRelay.open (sdk-reviewer follow-up from #76/#77).
+
+  func testSwipeBackDelegateIsWiredByTheControllerItself() async throws {
+    let presenter = makeWindowRootedController()
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
+
+    presenter.present(controller, animated: false)
+    _ = try await waitUntilPresented(by: presenter)
+
+    XCTAssertTrue(controller.presentationController?.delegate === controller)
+  }
+
+  // MARK: - Calling FrugaRelay.open(from:) twice presents once: the second
+  //        call is a no-op while a screen is already up.
+
+  func testDoubleOpenPresentsOnce() async throws {
+    let presenter = makeWindowRootedController()
+    FrugaRelay.configure(partnerKey: "partner_test_123", tokenProvider: { _ in "eyJ.test" }, options: FrugaRelayOptions())
+    var errors: [FrugaError] = []
+
+    FrugaRelay.open(from: presenter, onError: { errors.append($0) })
+    let first = try await waitUntilPresented(by: presenter)
+    FrugaRelay.open(from: presenter, onError: { errors.append($0) })
+    try await Task.sleep(nanoseconds: 200_000_000)
+
+    XCTAssertTrue(FrugaRelay.presentedController === first, "the first controller stays presented")
+    XCTAssertTrue(errors.isEmpty)
+
+    FrugaRelay.close()
+    try await waitUntilDismissed(from: presenter)
+  }
 }
 
 // MARK: - Test double

@@ -129,4 +129,14 @@ final class FrugaNavigationPolicyTests: XCTestCase {
 
     XCTAssertEqual(policy.decide(URL(string: "about:srcdoc")!, isMainFrame: true), .allow)
   }
+
+  // MARK: - Regression guard (sdk-reviewer, issue #78): an explicit :443 on
+  //        the CDN host is the same origin as the default-port entry.
+
+  func testExplicitDefaultHttpsPortEqualsDefaultPortOrigin() {
+    let policy = FrugaNavigationPolicy.standard(apiBaseUrl: nil)
+    let explicitPortUrl = URL(string: "https://cdn.fruga.co.uk:443/v/\(FrugaRelayVersion.shell)/native/index.html")!
+
+    XCTAssertEqual(policy.decide(explicitPortUrl, isMainFrame: true), .allow)
+  }
 }

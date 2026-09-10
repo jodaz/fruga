@@ -102,4 +102,20 @@ final class FrugaRelayOptionsTests: XCTestCase {
 
     XCTAssertNil(payload.token)
   }
+
+  // MARK: - RED for issue #78 (M2-I06, foreground TTL re-check), parity with
+  //        Android's `FrugaRelayOptions.tokenTtlSeconds`: absent means no
+  //        foreground re-check.
+
+  func testTokenTtlSecondsDefaultsToNil() {
+    let options = FrugaRelayOptions()
+
+    XCTAssertNil(options.tokenTtlSeconds)
+  }
+
+  func testTokenTtlSecondsIsSettable() {
+    let options = FrugaRelayOptions(tokenTtlSeconds: 300)
+
+    XCTAssertEqual(options.tokenTtlSeconds, 300)
+  }
 }

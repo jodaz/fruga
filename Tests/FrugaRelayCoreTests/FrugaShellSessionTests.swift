@@ -308,6 +308,49 @@ final class FrugaShellSessionTests: XCTestCase {
     XCTAssertEqual(reasons, [.initial])
     XCTAssertEqual(received, [.tokenRequired(TokenRequiredPayload(reason: .initial))])
   }
+
+  // MARK: - 15. Regression guard (sdk-reviewer, commit b8f155d): a repeat
+  //            requestBack while one is pending sends nothing and does not
+  //            complete twice.
+
+  func testRepeatRequestBackWhilePendingSendsNothingAndDoesNotCompleteTwice() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    var completions: [Bool] = []
+
+    session.requestBack { completions.append($0) }
+    let sentAfterFirst = transport.sent.count
+    session.requestBack { completions.append($0) }
+
+    XCTAssertEqual(transport.sent.count, sentAfterFirst, "a repeat ask while pending must send nothing")
+
+    session.receive(try fixture("backResult.valid")) // handled: true
+
+    XCTAssertEqual(completions, [true], "only the first requestBack's completion may fire")
+  }
+
+  // MARK: - 16. RED for issue #78 (M2-I06, network forwarding): send(_:)
+  //            forwards an arbitrary host message to the transport and
+  //            records it as lastSent, so the controller's `network`
+  //            forwarding can be asserted without a spy transport on the
+  //            real WKWebView-backed controller. Contract (not yet
+  //            implemented):
+  //
+  //            `public func send(_ message: FrugaHostMessage)` and
+  //            `public private(set) var lastSent: FrugaHostMessage?` on
+  //            `FrugaShellSession`.
+
+  func testSendForwardsToTransportAndRecordsLastSent() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+
+    session.send(.network(NetworkPayload(online: false)))
+
+    XCTAssertEqual(session.lastSent, .network(NetworkPayload(online: false)))
+    let sentData = try XCTUnwrap(transport.sent.last)
+    let sentObject = try JSONSerialization.jsonObject(with: sentData) as? NSDictionary
+    XCTAssertEqual(sentObject, ["type": "network", "online": false])
+  }
 }
 
 // MARK: - Test double
