@@ -16,6 +16,9 @@ extension FrugaRelay {
   /// Weak: the presenter owns the presented controller.
   @MainActor private static weak var presented: FrugaRelayViewController?
 
+  /// Test-only: the controller `open(from:onError:)` presented, if still up.
+  @MainActor static var presentedController: FrugaRelayViewController? { presented }
+
   /// Call once at app start, before `open(from:onError:)`.
   @MainActor
   public static func configure(
@@ -49,7 +52,7 @@ extension FrugaRelay {
   /// Dismisses the Relay screen, if one is up.
   @MainActor
   public static func close() {
-    presented?.dismiss(animated: presented?.dismissAnimated ?? true)
+    presented?.performDismiss()
     presented = nil
   }
 

@@ -40,9 +40,19 @@ public final class FrugaRelayViewController: UIViewController {
   }
   /// Not `lazy`: `deinit` must be able to cancel it without creating one.
   private var coordinator: FrugaTokenCoordinator?
-  /// Seam for host-less test processes, where an animated dismissal never
-  /// completes because no app drives the transition. Always `true` in an app.
-  var dismissAnimated: Bool = true
+  /// Seam for host-less test processes, where the real dismissal never
+  /// completes because no app drives the transition. `nil` in an app, where
+  /// `performDismiss` runs the real `dismiss(animated:)`.
+  var dismissHandler: (() -> Void)?
+
+  /// Every dismissal site goes through here so tests can observe it.
+  func performDismiss() {
+    if let dismissHandler {
+      dismissHandler()
+    } else {
+      dismiss(animated: true)
+    }
+  }
 
   public init(config: FrugaRelayConfig, onError: @escaping (FrugaError) -> Void) {
     let configuration = WKWebViewConfiguration()
@@ -184,7 +194,7 @@ extension FrugaRelayViewController: UIAdaptivePresentationControllerDelegate {
       // `dismiss` on a controller that is no longer presented walks up to its
       // presenter, so a late answer must not close someone else's screen.
       guard !handled, let self, self.presentingViewController != nil else { return }
-      self.dismiss(animated: self.dismissAnimated)
+      self.performDismiss()
     }
     return false
   }
