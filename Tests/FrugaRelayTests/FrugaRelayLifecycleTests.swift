@@ -90,7 +90,8 @@ final class FrugaRelayLifecycleTests: XCTestCase {
     while await recorder.reasons.isEmpty, Date() < initialDeadline {
       try await Task.sleep(nanoseconds: 50_000_000)
     }
-    XCTAssertEqual(await recorder.reasons, [.initial])
+    let firstReasons = await recorder.reasons
+    XCTAssertEqual(firstReasons, [.initial])
 
     let coordinator = try XCTUnwrap(controller.coordinator)
     await coordinator.lastTokenAt = Date().addingTimeInterval(-2)
@@ -101,7 +102,8 @@ final class FrugaRelayLifecycleTests: XCTestCase {
     while await recorder.reasons.count < 2, Date() < ttlDeadline {
       try await Task.sleep(nanoseconds: 50_000_000)
     }
-    XCTAssertEqual(await recorder.reasons, [.initial, .ttl], "resuming past the TTL re-requests a .ttl token")
+    let finalReasons = await recorder.reasons
+    XCTAssertEqual(finalReasons, [.initial, .ttl], "resuming past the TTL re-requests a .ttl token")
   }
 
   // MARK: - Closing while a token request is in flight cancels the
