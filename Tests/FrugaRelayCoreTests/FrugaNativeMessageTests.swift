@@ -72,6 +72,26 @@ final class FrugaNativeMessageTests: XCTestCase {
     XCTAssertEqual(object["durationMs"] as? Double, 240)
   }
 
+  func testUnsupportedEngineCodeRawValue() {
+    XCTAssertEqual(ErrorPayload.Code(rawValue: "UNSUPPORTED_ENGINE"), .unsupportedEngine)
+  }
+
+  // UNSUPPORTED_ENGINE is native-raised only (the shell/web loader never sends it), so there
+  // is no fixture for it in packages/loader/src/native/fixtures/ — this is a literal, not a
+  // copy. The envelope is flat (matches error.valid.json), not nested under "payload".
+  func testUnsupportedEngineDecodesFromLiteral() throws {
+    let json = Data(
+      """
+      {"type":"error","code":"UNSUPPORTED_ENGINE","message":"x","recoverable":false}
+      """.utf8
+    )
+    let message = try FrugaNativeMessage.decode(json)
+    guard case let .error(payload) = message else { return XCTFail("expected .error, got \(message)") }
+    XCTAssertEqual(payload.code, .unsupportedEngine)
+    XCTAssertEqual(payload.message, "x")
+    XCTAssertEqual(payload.recoverable, false)
+  }
+
   func testDecodedMessagesAreEquatable() throws {
     let first = try FrugaNativeMessage.decode(fixture("balance.valid"))
     let second = try FrugaNativeMessage.decode(fixture("balance.valid"))
