@@ -31,17 +31,11 @@ import FrugaRelayCore
 /// there — it only runs in the mirror's macos-15 CI job.
 @MainActor
 final class FrugaRelayNavigationTests: XCTestCase {
-  private func makeInitPayload() -> InitPayload {
-    InitPayload(
+  private func makeConfig() -> FrugaRelayConfig {
+    FrugaRelayConfig(
       partnerKey: "partner_test_123",
-      token: nil,
-      theme: nil,
-      primaryColor: nil,
-      userId: nil,
-      apiBaseUrl: nil,
-      locale: nil,
-      safeArea: SafeArea(top: 0, right: 0, bottom: 0, left: 0),
-      debug: false
+      tokenProvider: { _ in "eyJ.test" },
+      options: FrugaRelayOptions()
     )
   }
 
@@ -49,7 +43,7 @@ final class FrugaRelayNavigationTests: XCTestCase {
   //         from the init payload's apiBaseUrl.
 
   func testControllerPolicyIsStandardForTheInitPayload() {
-    let viewController = FrugaRelayViewController(initPayload: makeInitPayload(), onError: { _ in })
+    let viewController = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
 
     XCTAssertEqual(viewController.policy, FrugaNavigationPolicy.standard(apiBaseUrl: nil))
   }
@@ -57,7 +51,7 @@ final class FrugaRelayNavigationTests: XCTestCase {
   // MARK: - Allowed navigation loads in the WebView; openExternally is not called.
 
   func testAllowedNavigationReturnsTrueAndDoesNotOpenExternally() {
-    let viewController = FrugaRelayViewController(initPayload: makeInitPayload(), onError: { _ in })
+    let viewController = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
     var opened: [URL] = []
     viewController.openExternally = { opened.append($0) }
     let cdnURL = URL(string: "https://cdn.fruga.co.uk/v/\(FrugaRelayVersion.shell)/native/index.html")!
@@ -71,7 +65,7 @@ final class FrugaRelayNavigationTests: XCTestCase {
   // MARK: - Disallowed main-frame navigation opens externally and denies the load.
 
   func testDisallowedMainFrameNavigationOpensExternallyAndReturnsFalse() {
-    let viewController = FrugaRelayViewController(initPayload: makeInitPayload(), onError: { _ in })
+    let viewController = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
     var opened: [URL] = []
     viewController.openExternally = { opened.append($0) }
     let evilURL = URL(string: "https://evil.example.com")!
@@ -85,7 +79,7 @@ final class FrugaRelayNavigationTests: XCTestCase {
   // MARK: - Subframe/subresource navigation is always allowed, regardless of origin.
 
   func testSubframeNavigationIsAlwaysAllowedAndDoesNotOpenExternally() {
-    let viewController = FrugaRelayViewController(initPayload: makeInitPayload(), onError: { _ in })
+    let viewController = FrugaRelayViewController(config: makeConfig(), onError: { _ in })
     var opened: [URL] = []
     viewController.openExternally = { opened.append($0) }
     let evilURL = URL(string: "https://evil.example.com")!
