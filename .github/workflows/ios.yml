@@ -1,0 +1,28 @@
+name: iOS
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+
+      - name: Test core
+        run: swift test --filter FrugaRelayCoreTests
+
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: xcodebuild -scheme FrugaRelay -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' test
+        env:
+          CODE_SIGNING_ALLOWED: NO
