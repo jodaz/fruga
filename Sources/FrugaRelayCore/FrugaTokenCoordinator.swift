@@ -73,6 +73,12 @@ public actor FrugaTokenCoordinator {
     return now.timeIntervalSince(lastTokenAt) >= ttl
   }
 
+  /// Seam for tests and the foreground TTL re-check: record a delivery time
+  /// without exposing a public setter.
+  internal func markTokenDelivered(at date: Date) {
+    lastTokenAt = date
+  }
+
   public func cancel() {
     inFlight?.cancel()
     inFlight = nil
