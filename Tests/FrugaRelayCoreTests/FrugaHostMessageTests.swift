@@ -15,9 +15,11 @@ import XCTest
 /// }
 /// public struct InitPayload: Encodable, Equatable {
 ///   let partnerKey: String
-///   let token, theme, primaryColor, userId, apiBaseUrl, locale: String?
+///   let token, primaryColor, userId, apiBaseUrl, locale: String?
+///   let theme: Theme?
 ///   let safeArea: SafeArea
 ///   let debug: Bool
+///   enum Theme: String, Codable, Equatable { case light, dark }   // wire lowercase
 /// }
 /// public struct SafeArea: Encodable, Equatable { let top, right, bottom, left: Int }
 /// public struct TokenUpdatePayload: Encodable, Equatable { let token: String }
@@ -56,7 +58,7 @@ final class FrugaHostMessageTests: XCTestCase {
       InitPayload(
         partnerKey: "partner_test_123",
         token: "eyJhbGciOiJIUzI1NiJ9.test.token",
-        theme: "light",
+        theme: .light,
         primaryColor: "#4F46E5",
         userId: "user_42",
         apiBaseUrl: "https://api.fruga.co.uk",
@@ -110,5 +112,27 @@ final class FrugaHostMessageTests: XCTestCase {
     let keys = try XCTUnwrap(object).keys
 
     XCTAssertEqual(Set(keys), ["type", "partnerKey", "safeArea", "debug"])
+  }
+
+  // MARK: - InitPayload.Theme is a wire-lowercase enum, not a raw String
+  //        (#76 sdk-reviewer blocker 3, matches Android and the shell validator).
+
+  func testDarkThemeEncodesAsLowercaseString() throws {
+    let message = FrugaHostMessage.`init`(
+      InitPayload(
+        partnerKey: "partner_test_123",
+        token: nil,
+        theme: .dark,
+        primaryColor: nil,
+        userId: nil,
+        apiBaseUrl: nil,
+        locale: nil,
+        safeArea: SafeArea(top: 0, right: 0, bottom: 0, left: 0),
+        debug: false
+      )
+    )
+
+    let object = try JSONSerialization.jsonObject(with: message.encode()) as? [String: Any]
+    XCTAssertEqual(object?["theme"] as? String, "dark")
   }
 }

@@ -285,6 +285,29 @@ final class FrugaShellSessionTests: XCTestCase {
     XCTAssertEqual(openedURLs, [URL(string: "https://example.com/terms")!])
     XCTAssertEqual(received, [.openExternal(OpenExternalPayload(url: "https://example.com/terms"))])
   }
+
+  // MARK: - 14. receive(_:) of a tokenRequired message invokes onTokenRequired
+  //            with the reason and still forwards to onMessage (#76,
+  //            sdk-reviewer blocker 5: tokenRequired wired to
+  //            FrugaTokenCoordinator). RED: `onTokenRequired` does not exist
+  //            yet on `FrugaShellSession`.
+
+  func testReceiveTokenRequiredInvokesOnTokenRequiredAndForwards() async throws {
+    let transport = FakeTransport()
+    var received: [FrugaNativeMessage] = []
+    var reasons: [TokenRequiredPayload.Reason] = []
+    let session = FrugaShellSession(
+      transport: transport,
+      onMessage: { received.append($0) },
+      onError: { _ in }
+    )
+    session.onTokenRequired = { reasons.append($0) }
+
+    session.receive(try fixture("tokenRequired.valid"))
+
+    XCTAssertEqual(reasons, [.initial])
+    XCTAssertEqual(received, [.tokenRequired(TokenRequiredPayload(reason: .initial))])
+  }
 }
 
 // MARK: - Test double
