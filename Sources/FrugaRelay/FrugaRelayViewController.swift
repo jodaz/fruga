@@ -38,8 +38,11 @@ public final class FrugaRelayViewController: UIViewController {
     }
     self.present(SFSafariViewController(url: url), animated: true)
   }
-  /// Not `lazy`: `deinit` must be able to cancel it without creating one.
   var coordinator: FrugaTokenCoordinator?
+  /// A token, not `removeObserver(self)`: `deinit` is nonisolated and may not
+  /// touch main-actor state, and passing `self` to the notification centre
+  /// counts as touching it.
+  nonisolated(unsafe) private var foregroundObserver: NSObjectProtocol?
   /// The `init` payload the session started with, composed after the first
   /// layout so the safe area is measured, not zeros.
   private(set) var lastInitPayload: InitPayload?
@@ -102,12 +105,13 @@ public final class FrugaRelayViewController: UIViewController {
     bridge.shouldAllowNavigation = { [weak self] url, isMainFrame in
       self?.handleNavigation(to: url, isMainFrame: isMainFrame) ?? false
     }
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(applicationWillEnterForeground),
-      name: UIApplication.willEnterForegroundNotification,
-      object: nil
-    )
+    foregroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.willEnterForegroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.applicationWillEnterForeground() }
+    }
   }
 
   @available(*, unavailable)
@@ -116,12 +120,11 @@ public final class FrugaRelayViewController: UIViewController {
   }
 
   deinit {
-    NotificationCenter.default.removeObserver(self)
-    // The provider is cancelled on close; this is the belt-and-braces path for
-    // a controller that is released without ever being dismissed.
-    if let coordinator {
-      Task { await coordinator.cancel() }
+    if let foregroundObserver {
+      NotificationCenter.default.removeObserver(foregroundObserver)
     }
+    // The provider is cancelled in `viewDidDisappear`; `deinit` cannot touch
+    // the coordinator, which is main-actor state.
     // The content controller retains its handlers for as long as the WebView
     // lives. `deinit` is nonisolated and the WebView is main-actor state, so
     // only touch it when UIKit deallocates us on the main thread (it does);
@@ -203,7 +206,7 @@ public final class FrugaRelayViewController: UIViewController {
     session.send(.network(NetworkPayload(online: online)))
   }
 
-  @objc private func applicationWillEnterForeground() {
+  private func applicationWillEnterForeground() {
     guard let ttl = config.options.tokenTtlSeconds, let coordinator else { return }
     Task {
       guard await coordinator.needsRefresh(ttl: ttl, now: Date()) else { return }
