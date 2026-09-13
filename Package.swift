@@ -22,10 +22,16 @@ let package = Package(
       resources: [.copy("Fixtures")],
       swiftSettings: [.swiftLanguageMode(.v5)]
     ),
+    // Same `path: "Tests"` + `sources:` shape as the core target, so this one
+    // can copy the shared `Tests/Fixtures` directory too (a resource path may
+    // not escape its target's directory).
     .testTarget(
       name: "FrugaRelayTests",
       dependencies: ["FrugaRelay", "FrugaRelayCore"],
-      path: "Tests/FrugaRelayTests",
+      path: "Tests",
+      exclude: ["FrugaRelayCoreTests"],
+      sources: ["FrugaRelayTests"],
+      resources: [.copy("Fixtures")],
       swiftSettings: [.swiftLanguageMode(.v5)]
     )
   ]

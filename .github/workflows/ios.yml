@@ -47,6 +47,8 @@ jobs:
           echo "cores: $(sysctl -n hw.ncpu)"
 
       - name: Test
-        run: xcodebuild -scheme FrugaRelay -destination "id=$DEST_ID" -test-timeouts-enabled YES -default-test-execution-time-allowance 120 test
+        # Thread Sanitizer (#79): all bridge traffic is main-actor only, so a
+        # data race here is a contract violation, not a flake.
+        run: xcodebuild -scheme FrugaRelay -destination "id=$DEST_ID" -enableThreadSanitizer YES -test-timeouts-enabled YES -default-test-execution-time-allowance 120 test
         env:
           CODE_SIGNING_ALLOWED: NO

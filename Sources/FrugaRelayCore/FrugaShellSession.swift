@@ -29,6 +29,10 @@ public final class FrugaShellSession {
   /// screen, which hands it to the same system browser component the
   /// navigation allowlist uses.
   public var onOpenExternal: ((URL) -> Void)?
+  /// An inbound message was dropped. Carries the raw JSON `type` when the body
+  /// had one, else `nil` — and nothing else from the body, which is untrusted
+  /// (#129). Mirrors Android's `FrugaShellSession.onDropped`.
+  public var onDropped: ((String?) -> Void)?
   /// The last message handed to `send(_:)` (or replayed as `init`). Internal
   /// on purpose: it is test and diagnostic state, and a partner must not be
   /// able to read a bearer token back out of the session.
@@ -39,6 +43,10 @@ public final class FrugaShellSession {
   private var initHostMessage: FrugaHostMessage?
   private var pendingBack: ((Bool) -> Void)?
   private var backTimeout: Task<Void, Never>?
+  /// Unlike `back`, a repeat `getBalance` ask is allowed: every pending caller
+  /// resolves from the next `balance`.
+  private var pendingBalance: [(Result<FrugaBalance, FrugaError>) -> Void] = []
+  private var balanceTimeouts: [Task<Void, Never>] = []
 
   public init(
     transport: FrugaShellTransport,
@@ -88,9 +96,33 @@ public final class FrugaShellSession {
   /// Trust boundary for everything the shell posts: malformed or unknown
   /// messages are dropped, never thrown and never crashed on.
   public func receive(_ json: Data) {
-    guard let message = try? FrugaNativeMessage.decode(json) else { return }
+    guard let message = try? FrugaNativeMessage.decode(json) else {
+      onDropped?(droppedType(json))
+      return
+    }
     switch message {
     case let .backResult(payload): resolveBack(payload.handled)
+    case let .balance(payload):
+      resolveBalance(.success(FrugaBalance(available: payload.available, pending: payload.pending)))
+    // An outdated shell is reported, not dropped: the message still reaches
+    // `onMessage` and the caller decides whether to keep using it.
+    case let .ready(payload) where payload.protocolVersion != FrugaRelayVersion.protocolVersion:
+      onError(
+        FrugaError(
+          code: .versionMismatch,
+          message: "Shell protocol version \(payload.protocolVersion) does not match "
+            + "the SDK's \(FrugaRelayVersion.protocolVersion)",
+          recoverable: false
+        )
+      )
+    // A shell-side error also fails a pending `getBalance`: the shell will not
+    // answer it after reporting one, so waiting out the timeout is dead time.
+    case let .error(payload):
+      resolveBalance(
+        .failure(
+          FrugaError(code: payload.code, message: payload.message, recoverable: payload.recoverable)
+        )
+      )
     case let .tokenRequired(payload): onTokenRequired?(payload.reason)
     case let .openExternal(payload):
       // A malformed URL is dropped, like any other malformed inbound field.
@@ -98,6 +130,54 @@ public final class FrugaShellSession {
     default: break
     }
     onMessage(message)
+  }
+
+  /// The `type` of a dropped body, and nothing else from it.
+  private func droppedType(_ json: Data) -> String? {
+    (try? JSONSerialization.jsonObject(with: json)).flatMap { ($0 as? [String: Any])?["type"] as? String }
+  }
+
+  /// Asks the shell for the balance. Completes with the next `balance`, or
+  /// `BRIDGE_TIMEOUT` if the shell stays silent. The default timeout matches
+  /// the loader's 5s `getBalance` budget.
+  public func requestBalance(
+    timeout: TimeInterval = 5,
+    completion: @escaping (Result<FrugaBalance, FrugaError>) -> Void
+  ) {
+    guard let message = try? FrugaHostMessage.getBalance.encode() else {
+      completion(.failure(Self.balanceTimeoutError))
+      return
+    }
+    transport.send(message)
+    pendingBalance.append(completion)
+    balanceTimeouts.append(
+      Task { [weak self] in
+        try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+        guard !Task.isCancelled else { return }
+        self?.resolveBalance(.failure(Self.balanceTimeoutError))
+      }
+    )
+  }
+
+  /// The marker that replaces a secret in anything handed to the partner sink.
+  /// Parity with Android's `FrugaShellSession.REDACTED`.
+  nonisolated static let redacted = "<redacted>"
+
+  private static let balanceTimeoutError = FrugaError(
+    code: .bridgeTimeout,
+    message: "The shell did not answer getBalance in time",
+    recoverable: true
+  )
+
+  /// A `balance` with nothing pending is ignored here (it still reaches
+  /// `onMessage`).
+  private func resolveBalance(_ result: Result<FrugaBalance, FrugaError>) {
+    balanceTimeouts.forEach { $0.cancel() }
+    balanceTimeouts.removeAll()
+    guard !pendingBalance.isEmpty else { return }
+    let completions = pendingBalance
+    pendingBalance.removeAll()
+    completions.forEach { $0(result) }
   }
 
   /// Asks the shell to handle a back gesture. Completes with the shell's
@@ -129,5 +209,16 @@ public final class FrugaShellSession {
     guard let pendingBack else { return }
     self.pendingBack = nil
     pendingBack(handled)
+  }
+}
+
+/// What the shell reported for `getBalance`. Mirrors Android's `FrugaBalance`.
+public struct FrugaBalance: Equatable, Sendable {
+  public let available: Double
+  public let pending: Double
+
+  public init(available: Double, pending: Double) {
+    self.available = available
+    self.pending = pending
   }
 }

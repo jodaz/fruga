@@ -69,8 +69,10 @@ public enum FrugaNativeMessage: Codable, Equatable {
   }
 }
 
-/// A mismatched `protocolVersion` still decodes: the caller answers with
-/// `VERSION_MISMATCH` rather than dropping the message.
+/// A mismatched `protocolVersion` still decodes and still reaches `onMessage`:
+/// `FrugaShellSession.receive` reports `VERSION_MISMATCH` (not recoverable)
+/// rather than dropping the message, and the caller decides whether to keep
+/// using the shell. Matches Android's `FrugaNativeMessage.Ready`.
 public struct ReadyPayload: Codable, Equatable {
   public let protocolVersion: Int
   public let sdkVersion: String
@@ -128,7 +130,7 @@ public struct ErrorPayload: Codable, Equatable {
 }
 
 public struct LogPayload: Codable, Equatable {
-  public enum Level: String, Codable {
+  public enum Level: String, Codable, Sendable {
     case debug, info, warn, error
   }
 

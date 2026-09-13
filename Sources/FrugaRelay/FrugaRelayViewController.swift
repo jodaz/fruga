@@ -71,7 +71,27 @@ public final class FrugaRelayViewController: UIViewController {
     messageProxy = proxy
     webView = WKWebView(frame: .zero, configuration: configuration)
     bridge = FrugaRelayWebView(webView: webView)
-    session = FrugaShellSession(transport: bridge, onError: onError)
+    // Every error the partner is told about is also logged, once (#79). A local
+    // closure, not the instance `report`: this runs before `super.init`.
+    let report: (FrugaError) -> Void = { error in
+      FrugaRelayViewController.withLogger { $0.error(error) }
+      onError(error)
+    }
+    session = FrugaShellSession(
+      transport: bridge,
+      // Shell `log` messages reach the partner sink in the same shape a native
+      // event does; a shell-sent `error` takes the same route as a native one,
+      // reaching the sink and `onError` once each (Android parity).
+      onMessage: { message in
+        if case let .error(payload) = message {
+          report(
+            FrugaError(code: payload.code, message: payload.message, recoverable: payload.recoverable)
+          )
+        }
+        FrugaRelayViewController.forwardToLogger(message)
+      },
+      onError: report
+    )
     super.init(nibName: nil, bundle: nil)
 
     bridge.attach(session: session)
@@ -89,7 +109,7 @@ public final class FrugaRelayViewController: UIViewController {
         Task { @MainActor in self?.sendTokenUpdate(token) }
       },
       onError: { [weak self] error in
-        Task { @MainActor in self?.onError(error) }
+        Task { @MainActor in self?.report(error) }
       }
     )
     self.coordinator = coordinator
@@ -97,10 +117,14 @@ public final class FrugaRelayViewController: UIViewController {
       Task { await coordinator.request(reason: reason) }
     }
     // Read through the property, so a replacement set after init is honoured.
-    // Only web URLs leave the WebView; any other scheme is dropped.
+    // Only web URLs leave the WebView; any other scheme is dropped and logged.
     session.onOpenExternal = { [weak self] url in
-      guard FrugaExternalURLRule.allows(url) else { return }
-      self?.openExternally(url)
+      self?.openIfAllowed(url)
+    }
+    // A dropped message is a shell/SDK mismatch the partner sink must see; only
+    // its type, never the body (#129).
+    session.onDropped = { type in
+      Self.withLogger { $0.log(level: .warn, event: "bridge.dropped", data: ["type": type ?? "unknown"]) }
     }
     bridge.shouldAllowNavigation = { [weak self] url, isMainFrame in
       self?.handleNavigation(to: url, isMainFrame: isMainFrame) ?? false
@@ -125,6 +149,8 @@ public final class FrugaRelayViewController: UIViewController {
     }
     // The provider is cancelled in `viewDidDisappear`; `deinit` cannot touch
     // the coordinator, which is main-actor state.
+    // The hosted screen is unregistered in `viewDidDisappear`, not here: a
+    // weak `liveScreen` load during `deinit` is already nil by then.
     // The content controller retains its handlers for as long as the WebView
     // lives. `deinit` is nonisolated and the WebView is main-actor state, so
     // only touch it when UIKit deallocates us on the main thread (it does);
@@ -146,6 +172,10 @@ public final class FrugaRelayViewController: UIViewController {
       webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
     ])
+
+    // Any live screen answers getBalance(), whether presented by `open(from:)`
+    // or hosted directly by the partner (`.agent/rules/native-sdk.md`).
+    FrugaRelay.registerHostedScreen(self)
 
     // Registered before the load starts: a `didFinish` that beats the first
     // layout pass must still find an `init` to send (parity with Android's
@@ -182,7 +212,7 @@ public final class FrugaRelayViewController: UIViewController {
       lastInitPayload = payload
     } catch {
       // Nothing can be mounted without an `init`, so this is terminal, not silent.
-      onError(
+      report(
         FrugaError(
           code: .bootstrapFailed,
           message: "Could not encode the init message: \(type(of: error))",
@@ -194,14 +224,78 @@ public final class FrugaRelayViewController: UIViewController {
 
   public override func viewDidDisappear(_ animated: Bool) {
     super.viewDidDisappear(animated)
-    relayDidDisappear(isDismissing: isBeingDismissed)
+    relayDidDisappear(isDismissing: isBeingDismissed || isMovingFromParent)
   }
 
-  /// Seam over `isBeingDismissed`, which UIKit only sets under a real
-  /// presentation; a host-less test process can never make it true.
+  /// A dismissed or popped screen must stop answering `getBalance()` even if
+  /// the partner still retains it, so this is where it unregisters, not
+  /// `deinit` (a weak `liveScreen` load during `deinit` is already nil).
+  public override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    FrugaRelay.registerHostedScreen(self)
+  }
+
+  /// Seam over `isBeingDismissed` / `isMovingFromParent`, which UIKit only
+  /// sets under a real presentation or push; a host-less test process can
+  /// never make either true.
   func relayDidDisappear(isDismissing: Bool) {
-    guard isDismissing, let coordinator else { return }
+    guard isDismissing else { return }
+    FrugaRelay.unregisterHostedScreen(self)
+    guard let coordinator else { return }
     Task { await coordinator.cancel() }
+  }
+
+  // MARK: - Logging
+
+  /// The session's callbacks are plain (non-isolated) closure types even though
+  /// it only ever calls them on the main actor, so the hop to the main-actor
+  /// `FrugaRelay.logger` is asserted here rather than scheduled — a `Task` hop
+  /// would reorder log lines against the errors they describe.
+  private static func withLogger(_ body: (FrugaLogger) -> Void) {
+    MainActor.assumeIsolated { body(FrugaRelay.logger) }
+  }
+
+  /// Errors raised by the screen itself (not by the session, which logs its
+  /// own): logged before they reach the partner's callback.
+  private func report(_ error: FrugaError) {
+    FrugaRelay.logger.error(error)
+    onError(error)
+  }
+
+  private static func forwardToLogger(_ message: FrugaNativeMessage) {
+    guard case let .log(payload) = message else { return }
+    withLogger { $0.log(level: payload.level, event: payload.event, data: logData(payload.data)) }
+  }
+
+  /// The shell types `log` data as `unknown`; flattened to `parent.child`
+  /// string pairs here. A token-shaped key or the partner key is dropped rather
+  /// than logged, at every depth, whatever the shell sends. Mirrors Android's
+  /// `FrugaRelayFragment.logData`.
+  private static func logData(_ data: Data?) -> [String: String] {
+    guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return [:]
+    }
+    return flatten(object, prefix: "")
+  }
+
+  private static func flatten(_ object: [String: Any], prefix: String) -> [String: String] {
+    var result: [String: String] = [:]
+    for (key, value) in object
+    where key != "partnerKey" && key.range(of: "token", options: .caseInsensitive) == nil {
+      let name = prefix + key
+      switch value {
+      case let nested as [String: Any]:
+        result.merge(flatten(nested, prefix: "\(name)."), uniquingKeysWith: { _, new in new })
+      // An array can hide a secret under a benign key: dropped, not stringified.
+      case is [Any]: continue
+      case is NSNull: result[name] = "null"
+      // Untrusted shell text: a secret can ride in a query value under a
+      // benign key, so every string is redacted before it reaches the sink.
+      case let text as String: result[name] = redactSecrets(text)
+      default: result[name] = String(describing: value)
+      }
+    }
+    return result
   }
 
   // MARK: - Internal
@@ -213,10 +307,24 @@ public final class FrugaRelayViewController: UIViewController {
     case .allow:
       return true
     case .openExternally:
-      // Non-web schemes are dropped rather than handed to the system.
-      if FrugaExternalURLRule.allows(url) { openExternally(url) }
+      openIfAllowed(url)
       return false
     }
+  }
+
+  /// Only http(s) leaves the SDK. The log names the scheme and never the URL:
+  /// a blocked `tel:` or custom-scheme target can carry personal data.
+  /// Mirrors Android's `FrugaRelayFragment.openIfAllowed`.
+  private func openIfAllowed(_ url: URL) {
+    guard FrugaExternalURLRule.allows(url) else {
+      FrugaRelay.logger.log(
+        level: .warn,
+        event: "navigation.blocked",
+        data: ["scheme": url.scheme ?? "none"]
+      )
+      return
+    }
+    openExternally(url)
   }
 
   /// Connectivity changed: tell the shell.
