@@ -88,10 +88,12 @@ FrugaRelay.open(from: self) { error in
 FrugaRelay.close()
 ```
 
-Both are `@MainActor`. `configure`, `open` and `close` are the **facade's** whole surface
-today — `FrugaRelayViewController`, `FrugaRelayWebView`, `FrugaShellSession`,
+Both are `@MainActor`. `configure`, `open`, `close`, `getBalance` and `logger` are the
+**facade's** whole surface — `FrugaRelayViewController`, `FrugaRelayWebView`, `FrugaShellSession`,
 `FrugaRelayConfig`, `FrugaRelayVersion` and all of `FrugaRelayCore` are public too, but
 you need none of them.
+`onError` is optional (it defaults to a no-op) and receives both native errors and the
+shell's own `error` messages.
 `open(from:onError:)` reports `BOOTSTRAP_FAILED` if `configure` was never called and
 `OFFLINE` if the device has no connectivity; a second `open` while a screen is up is a
 no-op. The screen:
@@ -104,6 +106,58 @@ no-op. The screen:
   reach the shell;
 - recovers from a WebView content-process termination: `PROCESS_TERMINATED` is reported,
   the shell is reloaded and `init` replayed byte-exactly.
+
+## Balance
+
+```swift
+switch await FrugaRelay.getBalance() {          // @MainActor, default timeout 5s
+case let .success(balance): print(balance.available, balance.pending)
+case let .failure(error): print(error.code)
+}
+```
+
+Asks any live Relay screen over the bridge — one presented by `open(from:)` or one you
+host directly with `FrugaRelayViewController`. "Live" means registered: `viewDidLoad`
+registers the screen, `viewDidDisappear` unregisters it when the screen is being
+dismissed or popped (`isBeingDismissed || isMovingFromParent`), and `viewDidAppear`
+re-registers it. A controller you dismissed or popped no longer answers `getBalance()`
+even if you still hold a reference to it. With no screen up there is no shell to ask,
+so it fails immediately with `BRIDGE_TIMEOUT` rather than waiting out the timeout; a shell
+that stays silent produces the same code after the timeout. A shell `error` while a
+request is pending resolves it as that error instead of waiting out the timeout.
+Concurrent calls are allowed: every pending caller resolves from the same `balance` or
+`error` the shell sends.
+
+## Logging
+
+```swift
+FrugaRelay.logger = MyLogger()   // @MainActor; default: os.Logger
+```
+
+```swift
+public protocol FrugaLogger {
+  func log(level: LogPayload.Level, event: String, data: [String: String])
+}
+```
+
+`data` defaults to `[:]` through an extension overload. Everything that reaches your
+`onError` also reaches the sink as `error` with `code` / `message` / `recoverable`, and
+the shell's own `log` and `error` messages are forwarded in the same shape — so one sink
+sees native and shell events together.
+
+| Event | Level | When |
+|---|---|---|
+| `error` | `error` | Any `FrugaError`, native or relayed from the shell |
+| `bridge.dropped` | `warn` | An inbound message failed to decode; `data` carries only its `type` (`"unknown"` when the body had none), never the body |
+| `navigation.blocked` | `warn` | A navigation or an `openExternal` for a non-http(s) scheme was dropped; `data` carries only the `scheme`, never the URL |
+| shell events | as sent | Whatever the shell logs, e.g. `widget_mounted` |
+
+The default sink is `os.Logger` with subsystem **`uk.co.fruga.relay`** and category
+`FrugaRelay`. It drops `debug` lines unless you configured `debug: true`, so a release
+build writes nothing by default. Nothing reaching the sink carries a token or a partner
+key: `log` data is flattened to `parent.child` string pairs with `partnerKey` and any
+token-shaped key removed at every depth, arrays dropped rather than stringified, and any
+`token=` / `partnerKey=` query value in a remaining string replaced with `<redacted>`.
 
 ## Presentation and back
 
@@ -145,17 +199,19 @@ pass to `open(from:onError:)`.
 | Code | Raised by | `recoverable` |
 |---|---|---|
 | `TIMEOUT` | shell | as sent by the shell |
-| `VERSION_MISMATCH` | shell only — relayed when the shell sends an `error`; the SDK does not compare `ready.protocolVersion` itself ([#129](https://github.com/FrugaInsurance/sdk/issues/129)) | as sent by the shell |
+| `VERSION_MISMATCH` | native — the shell's `ready.protocolVersion` differs from `FrugaRelayVersion.protocolVersion` (the message is still delivered, not dropped); also relayed when the shell sends an `error` | `false` when native-raised |
 | `BOOTSTRAP_FAILED` | shell; also native when `open` is called before `configure`, or `init` cannot be encoded | `false` when native-raised |
 | `OFFLINE` | native — `open` with no connectivity; nothing is presented | `true` |
-| `BRIDGE_TIMEOUT` | shell — what it maps the web loader's `NOT_READY` to | as sent by the shell |
+| `BRIDGE_TIMEOUT` | shell — what it maps the web loader's `NOT_READY` to; also native when `getBalance` is called with no Relay screen open, or the shell does not answer `getBalance` within its timeout | as sent by the shell, `true` when native-raised |
 | `PROCESS_TERMINATED` | native — `webViewWebContentProcessDidTerminate`; the shell is reloaded and `init` replayed | `true` |
 | `TOKEN_PROVIDER_FAILED` | native — your provider threw | `true` |
 | `UNSUPPORTED_ENGINE` | neither — **never raised on iOS**. The case exists so the code set matches Android, where the WebView version is checked at runtime; on iOS the 16.4 deployment target enforces the engine floor | `false` |
 
-`BRIDGE_TIMEOUT` is never raised natively on iOS today: WebKit has no
-renderer-unresponsive callback, so there is nothing to raise it from (Android raises it
-from `WebViewRenderProcessClient`).
+`BRIDGE_TIMEOUT` is raised natively on iOS in two cases: `getBalance()` with no Relay
+screen open (`FrugaRelay.swift`), and a `getBalance` request the shell never answers within
+its timeout (`FrugaShellSession.requestBalance`). It is not raised for a stalled renderer:
+WebKit has no renderer-unresponsive callback, so there is nothing to raise it from there
+(Android raises it from `WebViewRenderProcessClient`).
 
 ## Navigation and external links
 
@@ -182,18 +238,11 @@ Subframes are not policed — the Relay widget is itself an iframe — and `abou
 
 ## Known gaps
 
-- **No `FrugaRelay.logger`** — issue [#79](https://github.com/FrugaInsurance/sdk/issues/79).
-  There is no partner log sink and no `os.Logger` yet, so errors reach you only through
-  the `onError` closure, and lifecycle and `navigation.blocked` events are not reported
-  at all. Blocked navigations are still blocked.
 - **No SwiftUI wrapper** — issue [#132](https://github.com/FrugaInsurance/sdk/issues/132).
   Present Relay from a `UIViewController` for now.
-- **No `getBalance()`** — issue [#131](https://github.com/FrugaInsurance/sdk/issues/131).
-  The message exists on the wire but is never sent, and an inbound `balance` is decoded
-  and dropped.
-- **`ready.protocolVersion` is not checked**, and an unknown `tokenRequired.reason` is
-  dropped silently (the message fails to decode, so no token is requested and nothing is
-  recorded) — [#129](https://github.com/FrugaInsurance/sdk/issues/129).
+- **An unknown `tokenRequired.reason` requests no token** — the message fails to decode,
+  so it is reported as `bridge.dropped` rather than retried
+  ([#129](https://github.com/FrugaInsurance/sdk/issues/129)).
 - No sample app yet ([#80](https://github.com/FrugaInsurance/sdk/issues/80)); a
   published SwiftPM package is an M4 release task.
 
