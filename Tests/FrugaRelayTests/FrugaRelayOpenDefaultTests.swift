@@ -3,6 +3,7 @@
 import UIKit
 import XCTest
 
+@testable import FrugaRelayCore
 @testable import FrugaRelay
 
 /// RED test for the sdk-reviewer's should-fix finding on
