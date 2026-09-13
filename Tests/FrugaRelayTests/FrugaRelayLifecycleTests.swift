@@ -175,6 +175,7 @@ final class FrugaRelayLifecycleTests: XCTestCase {
       ),
       onError: { _ in }
     )
+    controller.loadsShellAutomatically = false
     presenter.present(controller, animated: false)
     _ = try await waitUntilPresented(by: presenter)
 
