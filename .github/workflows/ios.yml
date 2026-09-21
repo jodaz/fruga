@@ -52,6 +52,8 @@ jobs:
         # Sanitizer on this 3-core runner that stall exceeds the 120 s
         # per-test allowance, landing on a different test each attempt
         # (see #79 run history 2026-09-13..21). Run this target plain.
+        # Exception tracked by FrugaInsurance/sdk#152 (a FrugaShellTransport
+        # seam is the path back to TSan on this target).
         run: xcodebuild -scheme FrugaRelay -destination "id=$DEST_ID" -only-testing:FrugaRelayTests -test-timeouts-enabled YES -default-test-execution-time-allowance 120 test
         env:
           CODE_SIGNING_ALLOWED: NO
