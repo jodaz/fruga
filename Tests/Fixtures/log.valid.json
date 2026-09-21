@@ -1,0 +1,6 @@
+{
+  "type": "log",
+  "level": "info",
+  "event": "widget_mounted",
+  "data": { "durationMs": 240 }
+}
