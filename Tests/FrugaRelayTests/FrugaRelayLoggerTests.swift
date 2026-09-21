@@ -71,6 +71,23 @@ final class FrugaRelayLoggerTests: XCTestCase {
 
     XCTAssertEqual((FrugaRelay.logger as? OSLogLogger)?.isDebugEnabled, false)
   }
+
+  // MARK: - RED for the ios mirror CI leak (root cause A, sdk-debugger
+  //         2026-09-21): `FrugaRelay.isOnline` is process-global static state
+  //         that `reset()` does not restore, so a test that sets it `false`
+  //         (`FrugaRelayLoggingTests.testOpenWhileOfflineReportsOfflineToTheLogger`)
+  //         leaks it to every later `open(from:)` test, alphabetically after
+  //         this class. `reset()` must restore `isOnline = true`.
+
+  func testResetRestoresOnlineState() {
+    FrugaRelay.isOnline = false
+    // Guarantee the leak cannot cascade even if this assertion fails.
+    addTeardownBlock { FrugaRelay.isOnline = true }
+
+    FrugaRelay.reset()
+
+    XCTAssertTrue(FrugaRelay.isOnline)
+  }
 }
 
 // MARK: - Test double
