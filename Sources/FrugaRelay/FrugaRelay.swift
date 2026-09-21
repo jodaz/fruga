@@ -142,6 +142,9 @@ extension FrugaRelay {
     config = nil
     presented = nil
     liveScreen = nil
+    // `isOnline` is process-global static state and outlives a single test
+    // case; a test that sets it false must not leak that into the next one.
+    isOnline = true
     // `configure(debug:)` mutates the shared default sink in place, so a reset
     // that only reassigns it would leave debug logging on.
     defaultLogger.isDebugEnabled = false

@@ -171,7 +171,7 @@ All `internal`, reachable only through `@testable import`. Nothing here is publi
 | `FrugaTokenCoordinator.markTokenDelivered(at:)` | `FrugaTokenCoordinator` | Backdate a delivery for the foreground TTL re-check without a public setter on `lastTokenAt` |
 | `FrugaRelay.presentedController` | `FrugaRelay` | The controller `open` presented, if still up |
 | `FrugaRelay.isOnline` | `FrugaRelay` | Settable, so the offline-mount path runs without unplugging the machine |
-| `FrugaRelay.reset()` | `FrugaRelay` | Clears `config` and `presented` and restores the default `logger` between cases — the facade is process-wide state |
+| `FrugaRelay.reset()` | `FrugaRelay` | Clears `config`, `presented` and `liveScreen`, restores `isOnline` to `true` and the default `logger` between cases — the facade is process-wide state |
 | `FrugaRelayWebView.shouldAllowNavigation` | `FrugaRelayWebView` | The host's allowlist hook. Unset means allow, so a bare `FrugaRelayWebView` still loads |
 | `FrugaRelayWebView.jsStringLiteral(_:)` | `FrugaRelayWebView` | `nonisolated static`, so escaping can be tested without hopping to the main actor |
 | `FrugaShellSession.lastSent` | `FrugaShellSession` | `private(set)` and **internal on purpose**: it is test and diagnostic state, and a partner must not be able to read a bearer token back out of the session |
