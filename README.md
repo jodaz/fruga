@@ -167,6 +167,11 @@ sent to the shell as `back` and the sheet closes only when the shell answers
 closes and the default outcome is that back closes Relay. A repeat drag while the shell
 is still deciding is ignored rather than treated as unhandled.
 
+The widget's own header ✕ dismisses the same way: the shell forwards it as a bridge
+`close` message (decided 2026-09-23) and the controller dismisses whenever one arrives
+and a presenter is still there. It is never answered and may arrive more than once; a
+repeat on an already-dismissed screen is a no-op, the same guard `backResult` uses.
+
 ## Tokens
 
 ```swift
