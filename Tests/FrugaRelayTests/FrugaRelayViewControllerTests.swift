@@ -241,6 +241,52 @@ final class FrugaRelayViewControllerTests: XCTestCase {
     XCTAssertEqual(dismissed, 1, "dismissed within 2s of the shell reporting unhandled")
   }
 
+  // MARK: - Close (decided 2026-09-23, `.agent/rules/native-sdk.md` "Close"
+  //        paragraph, `docs/PRD.md` §5.7): the widget's header X asks to
+  //        close via the shell's `close` message; the controller dismisses
+  //        Relay the same way close() does. RED, and cannot run on Linux
+  //        (UIKit): reported as written-but-unexecuted in the Handoffs.
+
+  func testCloseMessageFromShellDismissesRelay() async throws {
+    let presenter = makeWindowRootedController()
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    controller.loadsShellAutomatically = false
+    presenter.present(controller, animated: false)
+    _ = try await waitUntilPresented(by: presenter)
+    var dismissed = 0
+    controller.dismissHandler = { dismissed += 1 }
+
+    controller.session.receive(try JSONEncoder().encode(FrugaNativeMessage.close))
+
+    let deadline = Date().addingTimeInterval(2.0)
+    while dismissed == 0, Date() < deadline {
+      try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    XCTAssertEqual(dismissed, 1, "dismissed within 2s of the shell sending close")
+  }
+
+  func testCloseMayArriveMoreThanOnceWithoutCallingDismissTwice() async throws {
+    let presenter = makeWindowRootedController()
+    let controller = makeViewController(config: makeConfig(), onError: { _ in })
+    controller.loadsShellAutomatically = false
+    presenter.present(controller, animated: false)
+    _ = try await waitUntilPresented(by: presenter)
+    var dismissed = 0
+    controller.dismissHandler = { dismissed += 1 }
+
+    controller.session.receive(try JSONEncoder().encode(FrugaNativeMessage.close))
+    let deadline = Date().addingTimeInterval(2.0)
+    while dismissed == 0, Date() < deadline {
+      try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    // A repeat close after Relay is already gone must not call the dismiss
+    // handler again -- mirrors the "already dismissed" backResult guard.
+    controller.session.receive(try JSONEncoder().encode(FrugaNativeMessage.close))
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    XCTAssertEqual(dismissed, 1)
+  }
+
   // MARK: - A wedged shell (no backResult at all) still dismisses, once
   //        `requestBack`'s default 1 s timeout resolves to unhandled.
 

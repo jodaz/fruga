@@ -72,6 +72,15 @@ final class FrugaNativeMessageTests: XCTestCase {
     XCTAssertEqual(object["durationMs"] as? Double, 240)
   }
 
+  // Close (decided 2026-09-23, `.agent/rules/native-sdk.md` "Close"
+  // paragraph, `docs/PRD.md` §5.7): the widget's header X asks to close;
+  // never answered, may arrive more than once. RED: FrugaNativeMessage has
+  // no `.close` case yet.
+  func testCloseValidDecodes() throws {
+    let message = try FrugaNativeMessage.decode(fixture("close.valid"))
+    guard case .close = message else { return XCTFail("expected .close, got \(message)") }
+  }
+
   func testUnsupportedEngineCodeRawValue() {
     XCTAssertEqual(ErrorPayload.Code(rawValue: "UNSUPPORTED_ENGINE"), .unsupportedEngine)
   }
@@ -109,6 +118,7 @@ final class FrugaNativeMessageTests: XCTestCase {
       "backResult.invalid",
       "error.invalid",
       "log.invalid",
+      "close.invalid",
     ]
     for name in invalidFixtureNames {
       let json = try fixture(name)

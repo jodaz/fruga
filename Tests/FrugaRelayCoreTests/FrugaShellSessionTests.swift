@@ -640,6 +640,112 @@ final class FrugaShellSessionTests: XCTestCase {
     XCTAssertEqual(onErrorCalls, 0)
     XCTAssertEqual(receivedMessages.count, 1)
   }
+
+  // MARK: - 22. RED for the Close bridge message (decided 2026-09-23,
+  //            `.agent/rules/native-sdk.md` "Close" paragraph, `docs/PRD.md`
+  //            §5.7): receive(_:) decodes `close` and forwards it to
+  //            onMessage, the same seam as every other shell -> native
+  //            message; the UIKit-side dismissal (analogue of Android's
+  //            unhandled-backResult path) is exercised in
+  //            FrugaRelayViewControllerTests, not here (UIKit is untestable
+  //            on Linux). Never answered: nothing is sent back to the
+  //            transport for it.
+
+  func testReceiveDecodesCloseAndForwardsToOnMessage() async throws {
+    let transport = FakeTransport()
+    var received: [FrugaNativeMessage] = []
+    let session = FrugaShellSession(
+      transport: transport,
+      onMessage: { received.append($0) },
+      onError: { _ in }
+    )
+
+    session.receive(try fixture("close.valid"))
+
+    guard case .close = try XCTUnwrap(received.first) else {
+      return XCTFail("expected .close, got \(String(describing: received.first))")
+    }
+  }
+
+  func testReceiveCloseMayArriveMoreThanOnce() async throws {
+    let transport = FakeTransport()
+    var received: [FrugaNativeMessage] = []
+    let session = FrugaShellSession(
+      transport: transport,
+      onMessage: { received.append($0) },
+      onError: { _ in }
+    )
+
+    session.receive(try fixture("close.valid"))
+    session.receive(try fixture("close.valid"))
+
+    XCTAssertEqual(received.count, 2)
+  }
+
+  func testReceiveCloseSendsNothingBackToTheShell() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+
+    session.receive(try fixture("close.valid"))
+
+    XCTAssertTrue(transport.sent.isEmpty)
+  }
+
+  // MARK: - 23. onClose (the seam the view controller now dismisses
+  //            through, instead of onMessage): fires once per `.close`,
+  //            fires again on a repeat `.close` (the shell may ask again if
+  //            the host ignored the first), never fires for any other
+  //            message, and still sends nothing back to the shell.
+
+  func testOnCloseFiresOncePerCloseMessage() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    var closeCount = 0
+    session.onClose = { closeCount += 1 }
+
+    session.receive(try fixture("close.valid"))
+
+    XCTAssertEqual(closeCount, 1)
+  }
+
+  func testOnCloseFiresAgainOnARepeatCloseMessage() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    var closeCount = 0
+    session.onClose = { closeCount += 1 }
+
+    session.receive(try fixture("close.valid"))
+    session.receive(try fixture("close.valid"))
+
+    XCTAssertEqual(closeCount, 2)
+  }
+
+  func testOnCloseDoesNotFireForOtherMessages() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    var closeCount = 0
+    session.onClose = { closeCount += 1 }
+
+    session.receive(try fixture("ready.valid"))
+    session.receive(try fixture("balance.valid"))
+    session.receive(try fixture("backResult.valid"))
+    session.receive(try fixture("openExternal.valid"))
+    session.receive(try fixture("tokenRequired.valid"))
+    session.receive(try fixture("error.valid"))
+    session.receive(try fixture("log.valid"))
+
+    XCTAssertEqual(closeCount, 0)
+  }
+
+  func testOnCloseSendsNothingBackToTheShell() async throws {
+    let transport = FakeTransport()
+    let session = FrugaShellSession(transport: transport, onError: { _ in })
+    session.onClose = {}
+
+    session.receive(try fixture("close.valid"))
+
+    XCTAssertTrue(transport.sent.isEmpty)
+  }
 }
 
 // MARK: - Test double
