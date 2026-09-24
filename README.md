@@ -107,6 +107,12 @@ no-op. The screen:
 - recovers from a WebView content-process termination: `PROCESS_TERMINATED` is reported,
   the shell is reloaded and `init` replayed byte-exactly.
 
+`FrugaRelayVersion.shell` stays pinned at `1.3.0` on iOS by decision (2026-09-24) until
+issue #167 (a real Xcode build and test of the UIKit target) closes. Until then iOS
+lacks the 1.3.5 shell's safe-area fix and the widget ✕ close (on iOS the widget's ✕
+collapses to the launcher instead of closing Relay). Android and React Native pin
+`1.3.5`.
+
 ## Balance
 
 ```swift
