@@ -14,6 +14,10 @@ public enum FrugaNativeMessage: Codable, Equatable {
   case backResult(BackResultPayload)
   case error(ErrorPayload)
   case log(LogPayload)
+  /// The widget's header X asked to close. Flat `{"type":"close"}`, no
+  /// payload; never answered and may arrive more than once
+  /// (`.agent/rules/native-sdk.md` "Close", `docs/PRD.md` §5.7).
+  case close
 
   /// Trust boundary: unknown `type` values and out-of-range enum values throw.
   public static func decode(_ json: Data) throws -> FrugaNativeMessage {
@@ -25,7 +29,7 @@ public enum FrugaNativeMessage: Codable, Equatable {
   }
 
   private enum Kind: String, Codable {
-    case ready, tokenRequired, balance, openExternal, backResult, error, log
+    case ready, tokenRequired, balance, openExternal, backResult, error, log, close
   }
 
   public init(from decoder: Decoder) throws {
@@ -38,6 +42,7 @@ public enum FrugaNativeMessage: Codable, Equatable {
     case .backResult: self = .backResult(try BackResultPayload(from: decoder))
     case .error: self = .error(try ErrorPayload(from: decoder))
     case .log: self = .log(try LogPayload(from: decoder))
+    case .close: self = .close
     }
   }
 
@@ -65,6 +70,8 @@ public enum FrugaNativeMessage: Codable, Equatable {
     case let .log(payload):
       try envelope.encode(Kind.log, forKey: .type)
       try payload.encode(to: encoder)
+    case .close:
+      try envelope.encode(Kind.close, forKey: .type)
     }
   }
 }

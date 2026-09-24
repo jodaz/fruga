@@ -50,9 +50,17 @@ public final class FrugaRelayViewController: UIViewController {
   /// Seam for tests that mount the view without a network round trip to the
   /// CDN shell. Set before the view loads; always `true` in an app.
   var loadsShellAutomatically = true
+  /// One-shot: `presentingViewController != nil` stays true for the whole of
+  /// an animated dismissal (and always in a host-less test with a stubbed
+  /// `dismissHandler`), so a fast double `close` or a `close` racing an
+  /// unhandled `backResult` must not call through twice. Mirrors Android's
+  /// shared `dismiss()` guard.
+  private var dismissed = false
 
   /// Every dismissal site goes through here so tests can observe it.
   func performDismiss() {
+    guard !dismissed else { return }
+    dismissed = true
     if let dismissHandler {
       dismissHandler()
     } else {
@@ -120,6 +128,14 @@ public final class FrugaRelayViewController: UIViewController {
     // Only web URLs leave the WebView; any other scheme is dropped and logged.
     session.onOpenExternal = { [weak self] url in
       self?.openIfAllowed(url)
+    }
+    // The widget's header X asked to close: dismiss the same way an unhandled
+    // `backResult` does. May arrive more than once; a late or repeat close on
+    // an already-dismissed screen must not walk up to its presenter (same
+    // guard as `presentationControllerShouldDismiss`).
+    session.onClose = { [weak self] in
+      guard let self, self.presentingViewController != nil else { return }
+      self.performDismiss()
     }
     // A dropped message is a shell/SDK mismatch the partner sink must see; only
     // its type, never the body (#129).

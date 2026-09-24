@@ -33,6 +33,10 @@ public final class FrugaShellSession {
   /// had one, else `nil` — and nothing else from the body, which is untrusted
   /// (#129). Mirrors Android's `FrugaShellSession.onDropped`.
   public var onDropped: ((String?) -> Void)?
+  /// The shell's header X asked to close. Never answered; may fire more than
+  /// once. Set by the screen, which dismisses Relay the same way it does for
+  /// an unhandled `backResult`.
+  public var onClose: (() -> Void)?
   /// The last message handed to `send(_:)` (or replayed as `init`). Internal
   /// on purpose: it is test and diagnostic state, and a partner must not be
   /// able to read a bearer token back out of the session.
@@ -124,6 +128,7 @@ public final class FrugaShellSession {
         )
       )
     case let .tokenRequired(payload): onTokenRequired?(payload.reason)
+    case .close: onClose?()
     case let .openExternal(payload):
       // A malformed URL is dropped, like any other malformed inbound field.
       if let url = URL(string: payload.url) { onOpenExternal?(url) }
